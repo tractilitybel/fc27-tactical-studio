@@ -50,7 +50,7 @@ python -m venv .venv
 .venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
 pip install -r requirements-dev.txt
 python run.py                    # optionally: python run.py path\to\match.mp4
-python -m pytest -q tests        # 47 tests
+python -m pytest -q tests        # 49 tests
 ```
 
 ## Documentation

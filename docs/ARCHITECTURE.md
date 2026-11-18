@@ -110,9 +110,9 @@ images match the screen exactly. Spotlights are painted first so they darken the
 
 ## Testing
 
-`python -m pytest -q tests` (47 tests):
+`python -m pytest -q tests` (49 tests):
 
-- `test_video.py` — frame accuracy (B-frames, MPEG-4, random/backward/keyframe boundaries), timecodes
+- `test_video.py` — frame accuracy (B-frames, MPEG-4, random/backward/keyframe boundaries, frame-skipping playback), index cache, timecodes
 - `test_document.py` — undo/redo, merging, layering, grouping, bookmarks, geometry/hit tests, project I/O,
   backups, corrupted files, relinking, recovery
 - `test_gui.py` — the real main window offscreen: seeking shows the exact frame, keyboard stepping, J/K/L,
