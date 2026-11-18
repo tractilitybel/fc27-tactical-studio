@@ -11,17 +11,20 @@ from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QGuiApplication, Q
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QFileDialog, QFormLayout,
                                QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
                                QPlainTextEdit, QProgressDialog, QPushButton, QScrollArea,
-                               QSplitter, QTabWidget, QVBoxLayout, QWidget, QListWidgetItem)
+                               QSplitter, QTabWidget, QVBoxLayout, QWidget, QListWidgetItem,
+                               QStackedWidget, QComboBox, QDialog, QDialogButtonBox, QInputDialog)
 
 from .. import APP_NAME, __version__
 from ..core import storage
-from ..core.document import Document
-from ..core.model import Bookmark, Kind, Project
+from ..core.document import Document, ScopedDocument
+from ..core.model import Board, Bookmark, Kind, Project
 from ..core.video import IndexData, VideoError, VideoSource, format_timecode, load_or_build_index
 from .bookmarks import BookmarkDialog, BookmarkPanel, CategoriesDialog
 from .canvas import Canvas
 from .dialogs import (GotoDialog, PreferencesDialog, ShortcutCard, ShortcutsDialog, about_text)
-from .export import export_bookmark_images, export_bookmarks_csv, export_frame, compose, safe_name
+from .board import BoardPanel, PX_PER_M, formation_tokens, render_pitch
+from .export import (compose, compose_compare, export_bookmark_images, export_bookmarks_csv,
+                     export_frame, safe_name, save_image)
 from .panels import PropertiesPanel, TelestratorBar, ToolPalette
 from .playback import Player, ThumbnailWorker
 from .settings import (app_data_dir, qsettings, SHORTCUTS, Preferences, load_shortcuts, recovery_dir,
@@ -31,7 +34,27 @@ from .timeline import Marker, Timeline, Transport
 VIDEO_FILTER = ("Video files (*.mp4 *.mkv *.mov *.avi *.webm *.m4v *.ts *.flv *.wmv);;"
                 "All files (*)")
 PROJECT_FILTER = f"FC27 Studio project (*{storage.EXTENSION})"
-WORKSPACES = ["review", "tactics", "present"]
+WORKSPACES = ["review", "tactics", "board", "present"]
+VIDEO_TOOLS = ["select"] + Kind.VIDEO_TOOLS
+BOARD_TOOLS = ["select"] + Kind.BOARD_TOOLS
+PRESENT_TOOLS = ["select"] + Kind.ALL
+
+
+class TokenDialog(QDialog):
+    def __init__(self, parent, number: str, name: str):
+        super().__init__(parent)
+        self.setWindowTitle("Player token")
+        form = QFormLayout(self)
+        self.number = QLineEdit(number)
+        self.number.setMaxLength(3)
+        self.name = QLineEdit(name)
+        self.name.setPlaceholderText("optional, e.g. Rodri")
+        form.addRow("Number", self.number)
+        form.addRow("Name", self.name)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        form.addRow(bb)
 
 
 class MatchInfoPanel(QWidget):
@@ -148,7 +171,8 @@ class MainWindow(QMainWindow):
         hl.addSpacing(24)
         self.ws_group = QButtonGroup(self)
         self.ws_buttons = {}
-        for i, (ws, label) in enumerate((("review", "Review"), ("tactics", "Tactics"), ("present", "Present"))):
+        for i, (ws, label) in enumerate((("review", "Review"), ("tactics", "Tactics"),
+                                         ("board", "Board"), ("present", "Present"))):
             b = QPushButton(label)
             b.setCheckable(True)
             b.setObjectName("workspaceButton")
@@ -157,6 +181,13 @@ class MainWindow(QMainWindow):
             self.ws_buttons[ws] = b
             hl.addWidget(b)
         hl.addStretch(1)
+        self.compare_combo = QComboBox()
+        for label, val in (("Before/after: off", "off"), ("Before/after: split", "split"),
+                           ("Before/after: side by side", "side")):
+            self.compare_combo.addItem(label, val)
+        self.compare_combo.setToolTip("Compare the original frame with your corrections (Y)")
+        hl.addWidget(self.compare_combo)
+        hl.addSpacing(16)
         self.project_label = QLabel("")
         self.project_label.setObjectName("projectLabel")
         hl.addWidget(self.project_label)
@@ -175,7 +206,17 @@ class MainWindow(QMainWindow):
         vl.addWidget(self.canvas, 1)
         vl.addWidget(self.timeline)
         vl.addWidget(self.transport)
-        ll.addWidget(video_area, 1)
+        self.board_canvas = Canvas()
+        self.board_canvas.board_mode = True
+        self.board_canvas.editable = True
+        self.board_canvas.px_per_m = PX_PER_M
+        self.board_canvas.style.color = "#ffffff"
+        self.board_canvas.placeholder = "Create a tactics board with “New” in the side panel."
+        self._pitch = render_pitch()
+        self.center_stack = QStackedWidget()
+        self.center_stack.addWidget(video_area)
+        self.center_stack.addWidget(self.board_canvas)
+        ll.addWidget(self.center_stack, 1)
         self.splitter.addWidget(left)
 
         self.side = QTabWidget()
@@ -191,6 +232,13 @@ class MainWindow(QMainWindow):
         self.telestrator = TelestratorBar(self.canvas)
         self.telestrator.clear_on_play.setChecked(self.prefs.telestrator_clear_on_play)
         self.match_info = MatchInfoPanel(self)
+        self.board_panel = BoardPanel()
+        self.board_props = PropertiesPanel(self.board_canvas, board=True)
+        self.board_props_scroll = QScrollArea()
+        self.board_props_scroll.setWidget(self.board_props)
+        self.board_props_scroll.setWidgetResizable(True)
+        self.board_props_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.current_board_id: Optional[str] = None
         self.splitter.addWidget(self.side)
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(1, 0)
@@ -234,15 +282,15 @@ class MainWindow(QMainWindow):
         A("edit.undo", lambda: self.doc.undo.undo())
         A("edit.redo", lambda: self.doc.undo.redo())
         A("edit.cut", self.cut)
-        A("edit.copy", lambda: self.canvas.copy_selection())
-        A("edit.paste", lambda: self.canvas.paste())
-        A("edit.duplicate", lambda: self.canvas.duplicate())
+        A("edit.copy", lambda: self.cv.copy_selection())
+        A("edit.paste", lambda: self.cv.paste())
+        A("edit.duplicate", lambda: self.cv.duplicate())
         A("edit.delete", self.delete_selection)
-        A("edit.select_all", lambda: self.canvas.select_all())
-        A("edit.group", lambda: self.doc.group(self._sel_doc_ids()))
-        A("edit.ungroup", lambda: self.doc.ungroup(self._sel_doc_ids()))
+        A("edit.select_all", lambda: self.cv.select_all())
+        A("edit.group", lambda: self.cur_doc.group(self._sel_doc_ids()))
+        A("edit.ungroup", lambda: self.cur_doc.ungroup(self._sel_doc_ids()))
         for m in ("front", "back", "forward", "backward"):
-            A(f"edit.{m}", lambda _c=False, mode=m: self.doc.reorder(self._sel_doc_ids(), mode))
+            A(f"edit.{m}", lambda _c=False, mode=m: self.cur_doc.reorder(self._sel_doc_ids(), mode))
         A("edit.prefs", self.preferences)
         A("play.toggle", self.toggle_play)
         A("play.reverse", lambda: self.player.jkl("j"))
@@ -266,18 +314,21 @@ class MainWindow(QMainWindow):
         A("bm.add_detailed", self.detailed_bookmark)
         A("bm.next", lambda: self.jump_bookmark(1))
         A("bm.prev", lambda: self.jump_bookmark(-1))
-        for tool in ["select"] + Kind.ALL:
+        for tool in ["select"] + Kind.EVERY:
             A(f"tool.{tool}", lambda _c=False, t=tool: self.choose_tool(t))
         A("tool.clear_telestrator", self.canvas.clear_telestrator)
         A("view.review", lambda: self.set_workspace("review"))
         A("view.tactics", lambda: self.set_workspace("tactics"))
         A("view.present", lambda: self.set_workspace("present"))
+        A("view.board", lambda: self.set_workspace("board"))
+        A("view.compare", self.cycle_compare)
+        A("file.export_compare", self.export_compare_dialog)
         A("view.presentation", self.toggle_presentation, checkable=True)
         A("view.fullscreen", self.toggle_fullscreen, checkable=True)
-        A("view.zoom_fit", lambda: self.canvas.set_zoom(None))
-        A("view.zoom_100", lambda: self.canvas.set_zoom(1.0))
-        A("view.zoom_in", lambda: self.canvas.zoom_by(1.25))
-        A("view.zoom_out", lambda: self.canvas.zoom_by(0.8))
+        A("view.zoom_fit", lambda: self.cv.set_zoom(None))
+        A("view.zoom_100", lambda: self.cv.set_zoom(1.0))
+        A("view.zoom_in", lambda: self.cv.zoom_by(1.25))
+        A("view.zoom_out", lambda: self.cv.zoom_by(0.8))
         A("view.hide_drawings", self.toggle_drawings, checkable=True)
         self.actions["view.hide_drawings"].setChecked(True)
         self.actions["view.hide_drawings"].setText("Show drawings")
@@ -307,6 +358,8 @@ class MainWindow(QMainWindow):
         ex = f.addMenu("Export")
         ex.addAction(a["file.export_frame"])
         ex.addAction("Export clean frame (no drawings)…", lambda: self.export_frame_dialog(False))
+        ex.addAction(a["file.export_compare"])
+        ex.addAction("Export tactics board image…", self.export_board_dialog)
         ex.addAction(a["file.copy_frame"])
         ex.addSeparator()
         ex.addAction("Export bookmark images…", self.export_bookmark_images_dialog)
@@ -330,8 +383,9 @@ class MainWindow(QMainWindow):
         e.addAction(a["edit.prefs"])
 
         v = mb.addMenu("&View")
-        for k in ("view.review", "view.tactics", "view.present"):
+        for k in ("view.review", "view.tactics", "view.board", "view.present"):
             v.addAction(a[k])
+        v.addAction(a["view.compare"])
         v.addSeparator()
         for k in ("view.presentation", "view.fullscreen"):
             v.addAction(a[k])
@@ -364,8 +418,11 @@ class MainWindow(QMainWindow):
         b.addAction("Edit categories…", self.edit_categories)
 
         t = mb.addMenu("&Tools")
-        for tool in ["select"] + Kind.ALL:
+        for tool in ["select"] + Kind.ALL + [Kind.CUTOUT]:
             t.addAction(a[f"tool.{tool}"])
+        tb = t.addMenu("Tactics board")
+        for tool in (Kind.TOKEN, Kind.BALL, Kind.MEASURE):
+            tb.addAction(a[f"tool.{tool}"])
         t.addSeparator()
         t.addAction(a["tool.clear_telestrator"])
 
@@ -404,6 +461,28 @@ class MainWindow(QMainWindow):
         cv.zoomChanged.connect(lambda s: self.status_zoom.setText(f"{s * 100:.0f}%"))
         cv.toolChanged.connect(self.palette.set_tool)
         cv.annotationsEdited.connect(self._refresh_ranges)
+        cv.statusMessage.connect(lambda m: self.statusBar().showMessage(m, 6000))
+        cv.compareChanged.connect(self._on_compare_changed)
+        self.compare_combo.activated.connect(
+            lambda i: self.canvas.set_compare(self.compare_combo.itemData(i)))
+        bc = self.board_canvas
+        bc.toolChanged.connect(self.palette.set_tool)
+        bc.statusMessage.connect(lambda m: self.statusBar().showMessage(m, 6000))
+        bc.stepRequested.connect(lambda _d: None)
+        bc.zoomChanged.connect(lambda s: self.status_zoom.setText(f"{s * 100:.0f}%"))
+        bc.tokenEditRequested.connect(self.edit_token)
+        bp = self.board_panel
+        bp.boardSelected.connect(self.select_board)
+        bp.addRequested.connect(self.new_board)
+        bp.duplicateRequested.connect(self.duplicate_board)
+        bp.renameRequested.connect(self.rename_board)
+        bp.deleteRequested.connect(self.delete_board)
+        bp.formationRequested.connect(self.place_formation)
+        bp.clearTeamRequested.connect(self.clear_team)
+        bp.colorChanged.connect(self.set_team_color)
+        bp.linkRequested.connect(self.link_board)
+        bp.gotoLinkRequested.connect(self.goto_board_link)
+        bp.exportRequested.connect(self.export_board_dialog)
         self.palette.toolSelected.connect(self.choose_tool)
         bp = self.bookmarks
         bp.jumpRequested.connect(lambda f: (pl.pause(), pl.seek(f)))
@@ -426,6 +505,8 @@ class MainWindow(QMainWindow):
         self.canvas.set_document(doc)
         self.bookmarks.set_document(doc, self.player.fps)
         self.match_info.load()
+        self.current_board_id = None
+        self.select_board(doc.project.boards[0].id if doc.project.boards else None)
         self._on_doc_changed("bookmarks")
         self._on_doc_changed("annotations")
         self._on_undo_changed()
@@ -443,6 +524,18 @@ class MainWindow(QMainWindow):
             self._refresh_ranges()
         if what == "project":
             self.match_info.load()
+        if what == "boards":
+            boards = self.doc.project.boards
+            if self.current_board_id is None or self.doc.project.board(self.current_board_id) is None:
+                self.select_board(boards[0].id if boards else None)
+            else:
+                self.board_panel.show_boards(boards, self.current_board_id)
+                self.board_panel.show_board(self.doc.project.board(self.current_board_id), self.player.fps)
+                self.board_canvas.update()
+        if what in ("board", "boards"):
+            self.board_canvas.prune_selection()
+            self.board_canvas.update()
+            self.board_props.sync()
         self._update_title()
 
     def _on_undo_changed(self) -> None:
@@ -483,7 +576,18 @@ class MainWindow(QMainWindow):
             pl.addItem(it)
 
     def _sel_doc_ids(self) -> list[str]:
-        return [a.id for a in self.canvas.selected() if not self.canvas.is_temp(a.id)]
+        return [a.id for a in self.cv.selected() if not self.cv.is_temp(a.id)]
+
+    @property
+    def cv(self) -> Canvas:
+        """The canvas of the current workspace (video or tactics board)."""
+        return self.board_canvas if self.workspace == "board" else self.canvas
+
+    @property
+    def cur_doc(self) -> Document:
+        if self.workspace == "board" and self.board_canvas.doc is not None:
+            return self.board_canvas.doc
+        return self.doc
 
     # ========================================================= playback
     def _on_image(self, index: int, img: QImage) -> None:
@@ -560,12 +664,27 @@ class MainWindow(QMainWindow):
 
     # ========================================================= workspaces
     def set_workspace(self, ws: str) -> None:
+        if ws == "board" and self.presenting:
+            return
         self.workspace = ws
         self.ws_buttons[ws].setChecked(True)
         self.side.blockSignals(True)
         while self.side.count():
             self.side.removeTab(0)
-        if ws == "review":
+        self.center_stack.setCurrentIndex(1 if ws == "board" else 0)
+        self.compare_combo.setEnabled(ws != "board")
+        if ws == "board":
+            self.player.pause()
+            self.palette.show()
+            self.palette.set_available(BOARD_TOOLS)
+            self.side.addTab(self.board_panel, "Board")
+            self.side.addTab(self.board_props_scroll, "Drawing")
+            if self.board_canvas.tool not in BOARD_TOOLS:
+                self.board_canvas.set_tool("select")
+            self.palette.set_tool(self.board_canvas.tool)
+            if not self.doc.project.boards:
+                self.statusBar().showMessage("Click “New” to create a tactics board.", 5000)
+        elif ws == "review":
             self.canvas.set_editable(False)
             self.palette.hide()
             self.side.addTab(self.bookmarks, "Incidents")
@@ -573,25 +692,226 @@ class MainWindow(QMainWindow):
         elif ws == "tactics":
             self.canvas.set_editable(True, telestrator=False)
             self.palette.show()
+            self.palette.set_available(VIDEO_TOOLS)
             self.side.addTab(self.props_scroll, "Drawing")
             self.side.addTab(self.bookmarks, "Incidents")
             self.side.addTab(self.match_info, "Match")
+            if self.canvas.tool not in VIDEO_TOOLS:
+                self.canvas.set_tool("select")
+            self.palette.set_tool(self.canvas.tool)
         else:
             self.canvas.set_editable(True, telestrator=True)
             self.canvas.persist_telestrator = self.telestrator.keep.isChecked()
             self.palette.show()
+            self.palette.set_available(PRESENT_TOOLS)
             self.side.addTab(self.telestrator, "Present")
-            self.choose_tool(Kind.FREEHAND if self.canvas.tool == "select" else self.canvas.tool)
+            keep = self.canvas.tool if self.canvas.tool in PRESENT_TOOLS and self.canvas.tool != "select" \
+                else Kind.FREEHAND
+            self.choose_tool(keep)
         self.side.blockSignals(False)
-        for tool in ["select"] + Kind.ALL:
-            self.actions[f"tool.{tool}"].setEnabled(ws != "review")
         self.properties.sync()
+        self.board_props.sync()
 
     def choose_tool(self, tool: str) -> None:
-        if self.workspace == "review":
+        board_only = tool in (Kind.TOKEN, Kind.BALL, Kind.MEASURE)
+        video_only = tool in (Kind.CUTOUT, Kind.SPOTLIGHT)
+        if board_only and self.workspace != "board":
+            self.set_workspace("board")
+        elif video_only and self.workspace in ("board", "review", "present"):
             self.set_workspace("tactics")
-        self.canvas.set_tool(tool)
+        elif self.workspace == "review":
+            self.set_workspace("tactics")
+        allowed = {"board": BOARD_TOOLS, "present": PRESENT_TOOLS}.get(self.workspace, VIDEO_TOOLS)
+        if tool not in allowed:
+            return
+        self.cv.set_tool(tool)
         self.palette.set_tool(tool)
+
+    # ================================================== before / after
+    def cycle_compare(self) -> None:
+        if self.workspace == "board":
+            return
+        if not self._need_video():
+            return
+        self.canvas.cycle_compare()
+
+    def _on_compare_changed(self, mode: str) -> None:
+        i = self.compare_combo.findData(mode)
+        self.compare_combo.setCurrentIndex(max(0, i))
+        names = {"off": "Before/after comparison off",
+                 "split": "Split view — drag the divider. Left: before, right: after.",
+                 "side": "Side by side — left: before, right: after (view only)."}
+        self.statusBar().showMessage(names[mode], 4000)
+
+    def export_compare_dialog(self) -> None:
+        src = self._source_for_export()
+        if src is None:
+            return
+        self.player.pause()
+        mode = "split" if self.canvas.compare == "split" else "side"
+        fps = self.player.fps
+        tc = format_timecode(self.player.seconds(), fps, frame=self.player.current).replace(":", "-")
+        default = os.path.join(self._last_dir(), safe_name(f"{self.doc.project.name} {tc} before-after") + ".png")
+        path, flt = QFileDialog.getSaveFileName(self, "Export before/after image", default,
+                                                "PNG image (*.png);;JPEG image (*.jpg *.jpeg)")
+        if not path:
+            return
+        if not os.path.splitext(path)[1]:
+            path += ".jpg" if "JPEG" in flt else ".png"
+        try:
+            from .render import ndarray_to_qimage
+            frame = ndarray_to_qimage(src.frame(self.player.current))
+            anns = self.doc.annotations_at(self.player.current) + [a for a in self.canvas.temp if a.visible]
+            img = compose_compare(frame, anns, mode, self.canvas.split)
+            save_image(img, path, self.prefs.jpeg_quality)
+            self.statusBar().showMessage(f"Exported {path}", 5000)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+
+    # ====================================================== tactics boards
+    def current_board(self) -> Optional[Board]:
+        return self.doc.project.board(self.current_board_id) if self.current_board_id else None
+
+    def select_board(self, bid: Optional[str]) -> None:
+        board = self.doc.project.board(bid) if bid else None
+        self.current_board_id = board.id if board else None
+        bc = self.board_canvas
+        if board is None:
+            bc.set_document(None)
+            bc.set_image(None)
+        else:
+            bc.set_document(ScopedDocument(self.doc, board))
+            if bc.image is None:
+                bc.set_image(self._pitch)
+        self.board_panel.show_boards(self.doc.project.boards, self.current_board_id)
+        self.board_panel.show_board(board, self.player.fps)
+        self.board_props.sync()
+
+    def new_board(self) -> None:
+        n = len(self.doc.project.boards) + 1
+        b = Board(name=f"Board {n}")
+        b.annotations = formation_tokens("4-3-3", True, b.home_color) + \
+            formation_tokens("4-4-2", False, b.away_color)
+        for i, a in enumerate(b.annotations):
+            a.z = i + 1
+        if self.player.is_open:
+            b.linked_frame = self.player.current
+        self.doc.add_board(b)
+        self.select_board(b.id)
+        self.set_workspace("board")
+
+    def duplicate_board(self) -> None:
+        cur = self.current_board()
+        if cur is None:
+            return
+        import copy
+        from ..core.model import new_id
+        b = copy.deepcopy(cur)
+        b.id = new_id()
+        b.name = f"{cur.name} (copy)"
+        groups: dict = {}
+        for a in b.annotations:
+            a.id = new_id()
+            if a.group_id:
+                a.group_id = groups.setdefault(a.group_id, new_id())
+        self.doc.add_board(b, self.doc.project.boards.index(cur) + 1)
+        self.select_board(b.id)
+
+    def rename_board(self) -> None:
+        cur = self.current_board()
+        if cur is None:
+            return
+        name, ok = QInputDialog.getText(self, "Rename board", "Name:", text=cur.name)
+        if ok and name.strip():
+            self.doc.update_board(cur.id, "Rename board", name=name.strip())
+
+    def delete_board(self) -> None:
+        cur = self.current_board()
+        if cur is None:
+            return
+        if QMessageBox.question(self, "Delete board", f"Delete “{cur.name}”?") != QMessageBox.Yes:
+            return
+        self.doc.remove_board(cur.id)
+
+    def _team_tokens(self, board: Board, home: bool) -> list:
+        col = (board.home_color if home else board.away_color).lower()
+        return [a for a in board.annotations if a.kind == Kind.TOKEN and a.color.lower() == col]
+
+    def place_formation(self, home: bool, name: str) -> None:
+        board = self.current_board()
+        if board is None:
+            self.new_board()
+            board = self.current_board()
+        sdoc = self.board_canvas.doc
+        old = [a.id for a in self._team_tokens(board, home)]
+        tokens = formation_tokens(name, home, board.home_color if home else board.away_color,
+                                  self.board_canvas.token_size)
+        sdoc.undo.begin_macro(f"Place {name}")
+        sdoc.remove_annotations(old)
+        sdoc.add_annotations(tokens, f"Place {name}")
+        sdoc.undo.end_macro()
+
+    def clear_team(self, home: bool) -> None:
+        board = self.current_board()
+        if board is not None:
+            self.board_canvas.doc.remove_annotations([a.id for a in self._team_tokens(board, home)])
+
+    def set_team_color(self, home: bool, color: str) -> None:
+        board = self.current_board()
+        if board is None:
+            return
+        ids = [a.id for a in self._team_tokens(board, home)]
+        u = self.doc.undo
+        u.begin_macro("Change team colour")
+        if ids:
+            self.board_canvas.doc.modify_annotations(ids, lambda a: setattr(a, "color", color), "Recolour")
+        self.doc.update_board(board.id, **({"home_color": color} if home else {"away_color": color}))
+        u.end_macro()
+        self.board_panel.show_board(board, self.player.fps)
+
+    def link_board(self) -> None:
+        board = self.current_board()
+        if board is None or not self._need_video():
+            return
+        self.doc.update_board(board.id, "Link board to video", linked_frame=self.player.current)
+
+    def goto_board_link(self) -> None:
+        board = self.current_board()
+        if board is None or board.linked_frame is None or not self.player.is_open:
+            return
+        self.set_workspace("tactics")
+        self.player.seek(board.linked_frame)
+
+    def edit_token(self, aid: str) -> None:
+        sdoc = self.board_canvas.doc
+        a = sdoc.find_annotation(aid) if sdoc else None
+        if a is None:
+            return
+        d = TokenDialog(self, a.text, a.name)
+        if d.exec():
+            num, name = d.number.text().strip(), d.name.text().strip()
+            sdoc.modify_annotations([aid], lambda x: (setattr(x, "text", num), setattr(x, "name", name)),
+                                    "Edit player token")
+
+    def export_board_dialog(self) -> None:
+        board = self.current_board()
+        if board is None:
+            QMessageBox.information(self, "Export", "Create a tactics board first.")
+            return
+        default = os.path.join(self._last_dir(), safe_name(f"{self.doc.project.name} {board.name}") + ".png")
+        path, flt = QFileDialog.getSaveFileName(self, "Export tactics board", default,
+                                                "PNG image (*.png);;JPEG image (*.jpg *.jpeg)")
+        if not path:
+            return
+        if not os.path.splitext(path)[1]:
+            path += ".jpg" if "JPEG" in flt else ".png"
+        from .render import render_frame
+        img = render_frame(self._pitch, [a for a in board.annotations if a.visible], PX_PER_M)
+        try:
+            save_image(img, path, self.prefs.jpeg_quality)
+            self.statusBar().showMessage(f"Exported {path}", 5000)
+        except OSError as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
 
     def toggle_presentation(self, on: Optional[bool] = None) -> None:
         if on is None:
@@ -635,14 +955,14 @@ class MainWindow(QMainWindow):
 
     # ============================================================ editing
     def delete_selection(self) -> None:
-        if self.canvas.selection:
-            self.canvas.delete_selection()
+        if self.cv.selection:
+            self.cv.delete_selection()
         elif self.bookmarks.list.hasFocus():
             self.bookmarks._delete_selected()
 
     def cut(self) -> None:
-        if self.canvas.copy_selection():
-            self.canvas.delete_selection()
+        if self.cv.copy_selection():
+            self.cv.delete_selection()
 
     # ========================================================== bookmarks
     def _need_video(self) -> bool:

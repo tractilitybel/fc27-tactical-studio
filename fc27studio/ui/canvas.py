@@ -48,6 +48,7 @@ class Canvas(QWidget):
     toolChanged = Signal(str)
     annotationsEdited = Signal()
     statusMessage = Signal(str)
+    tokenEditRequested = Signal(str)
     compareChanged = Signal(str)
 
     def __init__(self, parent=None):
@@ -329,7 +330,10 @@ class Canvas(QWidget):
         self._paint_scene(p, lt, frame_rect, "before")
         self._paint_scene(p, rt, frame_rect, "after")
         for t, label in ((lt, "BEFORE"), (rt, "AFTER")):
-            self._paint_label(p, t.mapRect(frame_rect).topLeft() + QPointF(10, 10), label)
+            r = t.mapRect(frame_rect)
+            # Above the picture when there is room, so the label hides nothing.
+            at = QPointF(r.left(), r.top() - 30) if r.top() >= 32 else r.topLeft() + QPointF(10, 10)
+            self._paint_label(p, at, label)
 
     def _paint_label(self, p: QPainter, at: QPointF, label: str) -> None:
         f = QFont(self.font())
@@ -591,6 +595,8 @@ class Canvas(QWidget):
             self.setCursor(Qt.ArrowCursor if self.tool == "select" else Qt.CrossCursor)
             return
         if self._drag == "draw":
+            # The release position is the final end point even without a last move event.
+            self._update_draw(self.to_video(ev.position()), ev.modifiers())
             self._end_draw()
         elif self._drag == "rubber":
             r = self._rubber.normalized() if self._rubber else QRectF()
@@ -620,6 +626,8 @@ class Canvas(QWidget):
         hit = self.annotation_at(ev.position())
         if hit is not None and hit.kind == Kind.TEXT:
             self.edit_text(hit)
+        elif hit is not None and hit.kind == Kind.TOKEN:
+            self.tokenEditRequested.emit(hit.id)
 
     def _commit_edit(self, label: str) -> None:
         if self.doc is not None and self._before:

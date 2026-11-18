@@ -96,7 +96,7 @@ class Annotation:
         return x0, y0, x1, y1
 
     def token_radius(self) -> float:
-        return max(4.0, self.font_size * (0.32 if self.kind == Kind.BALL else 0.75))
+        return max(4.0, self.font_size * (0.45 if self.kind == Kind.BALL else 0.75))
 
     def center(self) -> Point:
         x0, y0, x1, y1 = self.bbox()

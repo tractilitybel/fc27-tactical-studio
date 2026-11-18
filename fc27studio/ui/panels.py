@@ -28,7 +28,7 @@ def color_icon(hex_color: str, size: int = 14) -> QIcon:
 TOOL_GLYPHS = {
     "select": "⬚", Kind.ARROW: "➜", Kind.CURVED_ARROW: "↷", Kind.RUN: "⇢", Kind.LINE: "╱",
     Kind.FREEHAND: "✎", Kind.CIRCLE: "◯", Kind.RECT: "▭", Kind.ZONE: "⬠", Kind.TEXT: "T",
-    Kind.SPOTLIGHT: "◉",
+    Kind.SPOTLIGHT: "◉", Kind.CUTOUT: "✂", Kind.TOKEN: "❶", Kind.BALL: "⚽", Kind.MEASURE: "↔",
 }
 
 
@@ -42,7 +42,7 @@ class ToolPalette(QToolBar):
         self.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self.group = QActionGroup(self)
         self.actions_by_tool: dict[str, QAction] = {}
-        for tool in ["select"] + Kind.ALL:
+        for tool in ["select"] + Kind.EVERY:
             label = "Select" if tool == "select" else Kind.LABELS[tool]
             act = QAction(TOOL_GLYPHS[tool], self)
             act.setCheckable(True)
@@ -62,6 +62,11 @@ class ToolPalette(QToolBar):
         act = self.actions_by_tool.get(tool)
         if act:
             act.setChecked(True)
+
+    def set_available(self, tools: list[str]) -> None:
+        """Show only the tools that make sense in the current workspace."""
+        for tool, act in self.actions_by_tool.items():
+            act.setVisible(tool in tools)
 
     def set_tooltips(self, keys: dict[str, str]) -> None:
         for tool, act in self.actions_by_tool.items():
@@ -121,9 +126,10 @@ def _slider(lo, hi, val) -> QSlider:
 class PropertiesPanel(QWidget):
     """Edits the selected drawings, or the defaults for new drawings."""
 
-    def __init__(self, canvas: Canvas, parent=None):
+    def __init__(self, canvas: Canvas, parent=None, board: bool = False):
         super().__init__(parent)
         self.canvas = canvas
+        self.board = board
         self.fps = 30.0
         self._updating = False
         lay = QVBoxLayout(self)
@@ -194,6 +200,40 @@ class PropertiesPanel(QWidget):
         g.addWidget(b2, 2, 2)
         self.range_widgets = [self.start_s, self.end_s, b1, b2]
         lay.addWidget(vis)
+        vis.setVisible(not board)
+
+        # Before/after layer
+        from PySide6.QtWidgets import QComboBox
+        self.layer_row = QWidget()
+        lr = QHBoxLayout(self.layer_row)
+        lr.setContentsMargins(0, 0, 0, 0)
+        lr.addWidget(QLabel("Show in"))
+        self.layer_combo = QComboBox()
+        for label, val in (("Before and after", "both"), ("Before only", "before"), ("After only", "after")):
+            self.layer_combo.addItem(label, val)
+        self.layer_combo.setToolTip("Used by the before/after comparison (Y). Cut-outs default to "
+                                    "“After only”, so “Before” shows what really happened.")
+        self.layer_combo.currentIndexChanged.connect(
+            lambda i: self._set("layer", self.layer_combo.itemData(i), None))
+        lr.addWidget(self.layer_combo, 1)
+        lay.addWidget(self.layer_row)
+        self.layer_row.setVisible(not board)
+
+        # Player cut-out options
+        self.cut_box = QGroupBox("Player cut-out")
+        cg = QFormLayout(self.cut_box)
+        self.ghost_s = _slider(0, 100, 35)
+        self.ghost_s.setToolTip("0% = player fully removed from the original spot; "
+                                "100% = original left untouched")
+        self.ghost_s.valueChanged.connect(lambda v: self._set("ghost_opacity", v / 100, "ghost"))
+        cg.addRow("Original player", self.ghost_s)
+        self.link_cb = QCheckBox("Outline + arrow from original spot")
+        self.link_cb.toggled.connect(lambda v: self._set("show_link", bool(v), None))
+        cg.addRow(self.link_cb)
+        reset = QPushButton("Back to original position")
+        reset.clicked.connect(self._reset_cutout)
+        cg.addRow(reset)
+        lay.addWidget(self.cut_box)
 
         arrange = QGroupBox("Arrange")
         ag = QGridLayout(arrange)
@@ -223,6 +263,16 @@ class PropertiesPanel(QWidget):
 
     def _doc_ids(self) -> list[str]:
         return [a.id for a in self.canvas.selected() if not self.canvas.is_temp(a.id)]
+
+    def _reset_cutout(self) -> None:
+        cuts = [a for a in self.canvas.selected() if a.kind == Kind.CUTOUT and a.source_points]
+        if not cuts or not self.canvas.doc:
+            return
+
+        def fn(a):
+            a.points = [tuple(q) for q in a.source_points]
+            a.rotation = 0.0
+        self.canvas.doc.modify_annotations([a.id for a in cuts], fn, "Reset cut-out position")
 
     def _reorder(self, mode: str) -> None:
         if self.canvas.doc and self._doc_ids():
@@ -304,6 +354,14 @@ class PropertiesPanel(QWidget):
         if doc_sel:
             self.start_s.setValue(min(a.start_frame for a in sel if not self.canvas.is_temp(a.id)))
             self.end_s.setValue(max(a.end_frame for a in sel if not self.canvas.is_temp(a.id)))
+        cuts = [a for a in sel if a.kind == Kind.CUTOUT]
+        self.cut_box.setVisible(bool(cuts))
+        if cuts:
+            self.ghost_s.setValue(int(round(cuts[0].ghost_opacity * 100)))
+            self.link_cb.setChecked(cuts[0].show_link)
+        li = self.layer_combo.findData(src.layer if src else "both")
+        self.layer_combo.setCurrentIndex(max(0, li))
+        self.layer_combo.setEnabled(n > 0)
         for k, b in self.btns.items():
             b.setEnabled(n > 0 if k not in ("group",) else len(self._doc_ids()) > 1)
         self._updating = False
