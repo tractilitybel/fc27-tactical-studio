@@ -23,6 +23,19 @@ class Marker:
     end: Optional[int]
     color: str
     title: str
+    kind: str = "bookmark"      # "bookmark" (flag) or "board" (square)
+
+
+@dataclass
+class Span:
+    """A drawing's visible range — clickable to jump to its first frame."""
+    id: str
+    start: int
+    end: int
+    color: str
+    label: str
+    selected: bool = False
+    row: int = 0
 
 
 class ThumbPopup(QLabel):
@@ -39,10 +52,13 @@ class Timeline(QWidget):
     hoverFrame = Signal(int)
     markerClicked = Signal(str)
     markerDoubleClicked = Signal(str)
+    spanClicked = Signal(str)          # drawing id
 
     RULER_H = 20
     MARK_H = 18
-    ANN_H = 8
+    ANN_ROWS = 3
+    ROW_H = 6
+    ANN_H = ANN_ROWS * ROW_H + (ANN_ROWS - 1)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -55,7 +71,7 @@ class Timeline(QWidget):
         self.v0 = 0.0
         self.v1 = 1.0
         self.markers: list[Marker] = []
-        self.ranges: list[tuple[int, int, str]] = []
+        self.ranges: list[Span] = []
         self.loop_a: Optional[int] = None
         self.loop_b: Optional[int] = None
         self.loop_enabled = False
@@ -93,7 +109,13 @@ class Timeline(QWidget):
         self.markers = markers
         self.update()
 
-    def set_ranges(self, ranges: list[tuple[int, int, str]]) -> None:
+    def set_ranges(self, ranges: list[Span]) -> None:
+        """Assign overlapping drawings to separate rows so each stays clickable."""
+        row_end = [-1] * self.ANN_ROWS
+        for sp in sorted(ranges, key=lambda r: (r.start, r.end)):
+            free = [i for i, e in enumerate(row_end) if e < sp.start]
+            sp.row = free[0] if free else min(range(self.ANN_ROWS), key=lambda i: row_end[i])
+            row_end[sp.row] = max(row_end[sp.row], sp.end)
         self.ranges = ranges
         self.update()
 
@@ -165,20 +187,47 @@ class Timeline(QWidget):
             p.drawLine(QPointF(xa, track_top), QPointF(xa, bottom))
             if self.loop_b is not None:
                 p.drawLine(QPointF(xb, track_top), QPointF(xb, bottom))
-        # Drawing ranges
-        for s, e, color in self.ranges:
-            if e < self.v0 or s > self.v1:
+            # A / B tags so the loop region is self-explanatory
+            f = QFont(self.font())
+            f.setPointSizeF(max(7.0, f.pointSizeF() - 2))
+            f.setBold(True)
+            p.setFont(f)
+            for x, tag in ((xa, "A"), (xb if self.loop_b is not None else None, "B")):
+                if x is None:
+                    continue
+                tr = QRectF(x - 6, bottom - 12, 12, 12)
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(70, 160, 255))
+                p.drawRoundedRect(tr, 2, 2)
+                p.setPen(QColor(255, 255, 255))
+                p.drawText(tr, Qt.AlignCenter, tag)
+        # Drawing ranges (clickable): bar + bright start tick
+        for sp in self.ranges:
+            if sp.end < self.v0 or sp.start > self.v1:
                 continue
-            x0, x1 = self._x_of(max(s, self.v0)), self._x_of(min(e, self.v1))
-            c = QColor(color)
-            c.setAlpha(170)
-            p.fillRect(QRectF(x0, ann_top, max(2, x1 - x0), self.ANN_H), c)
-        # Bookmarks
+            r = self._span_rect(sp, ann_top)
+            c = QColor(sp.color)
+            c.setAlpha(230 if sp.selected else 150)
+            p.fillRect(r, c)
+            if sp.start >= self.v0:
+                p.fillRect(QRectF(r.left(), r.top() - 1, 2.5, r.height() + 2), QColor(255, 255, 255, 230))
+            if sp.selected:
+                p.setPen(QPen(QColor(255, 255, 255), 1))
+                p.setBrush(Qt.NoBrush)
+                p.drawRect(r.adjusted(-0.5, -0.5, 0.5, 0.5))
+        # Bookmarks (flags) and linked tactics boards (squares)
         for m in self.markers:
             if m.frame < self.v0 - 1 or m.frame > self.v1 + 1:
                 continue
             x = self._x_of(m.frame)
             c = QColor(m.color)
+            if m.kind == "board":
+                p.setPen(QPen(QColor(20, 24, 30), 1))
+                p.setBrush(c)
+                p.drawRect(QRectF(x - 5, mark_top + 2, 10, 10))
+                p.setPen(QPen(c, 1, Qt.DotLine))
+                p.drawLine(QPointF(x, mark_top + 12), QPointF(x, bottom))
+                continue
             if m.end is not None and m.end > m.frame:
                 xe = self._x_of(min(m.end, self.v1))
                 cc = QColor(c)
@@ -238,6 +287,20 @@ class Timeline(QWidget):
             t += step
 
     # ------------------------------------------------------------- mouse
+    def _span_rect(self, sp: Span, ann_top: float) -> QRectF:
+        x0, x1 = self._x_of(max(sp.start, self.v0)), self._x_of(min(sp.end, self.v1))
+        y = ann_top + sp.row * (self.ROW_H + 1)
+        return QRectF(x0, y, max(4.0, x1 - x0), self.ROW_H)
+
+    def span_at(self, pos: QPointF) -> Optional[Span]:
+        ann_top = self.RULER_H + self.MARK_H + 2
+        hits = [sp for sp in self.ranges
+                if not (sp.end < self.v0 or sp.start > self.v1)
+                and self._span_rect(sp, ann_top).adjusted(-2, -1, 2, 1).contains(pos)]
+        if not hits:
+            return None
+        return min(hits, key=lambda sp: sp.end - sp.start)  # the most specific one
+
     def _marker_at(self, pos: QPointF) -> Optional[Marker]:
         if not (self.RULER_H <= pos.y() <= self.RULER_H + self.MARK_H):
             return None
@@ -255,6 +318,11 @@ class Timeline(QWidget):
         if m is not None:
             self.markerClicked.emit(m.id)
             self.seekRequested.emit(m.frame)
+            return
+        sp = self.span_at(ev.position())
+        if sp is not None:
+            self.spanClicked.emit(sp.id)
+            self.seekRequested.emit(sp.start)
             return
         self._scrubbing = True
         self._popup.hide()
@@ -276,7 +344,15 @@ class Timeline(QWidget):
             self.seekRequested.emit(f)
         else:
             m = self._marker_at(ev.position())
-            self.setToolTip(f"{m.title}" if m else "")
+            sp = None if m else self.span_at(ev.position())
+            if m:
+                self.setToolTip(m.title)
+            elif sp:
+                t = format_timecode(sp.start / self.fps, self.fps, frame=sp.start)
+                self.setToolTip(f"{sp.label} — click to jump to {t}")
+            else:
+                self.setToolTip("")
+            self.setCursor(Qt.PointingHandCursor if (m or sp) else Qt.ArrowCursor)
             if self.thumbnails_enabled:
                 self._show_popup(f)
                 self.hoverFrame.emit(f)
@@ -368,6 +444,7 @@ class Transport(QWidget):
         self.timecode.setObjectName("timecode")
         self.timecode.setMinimumWidth(170)
         lay.addWidget(self.timecode)
+        lay.addSpacing(10)
         lay.addWidget(QLabel("Frame"))
         self.frame_spin = QSpinBox()
         self.frame_spin.setRange(0, 0)
@@ -379,12 +456,27 @@ class Transport(QWidget):
         self.frame_spin.valueChanged.connect(self._frame_typed)
         lay.addWidget(self.frame_spin)
         lay.addStretch(1)
-        self.btn_a = _tb("A", "Set loop start ([)")
-        self.btn_b = _tb("B", "Set loop end (])")
-        self.btn_loop = _tb("⟲ Loop", "Toggle A/B loop (Ctrl+L)")
+        # A/B loop controls grouped in one labelled box so it's clear they belong together
+        from PySide6.QtWidgets import QFrame
+        self.loop_box = QFrame()
+        self.loop_box.setObjectName("loopBox")
+        self.loop_box.setToolTip("Repeat a section: set the start (A) and end (B), then turn the loop on.")
+        lb = QHBoxLayout(self.loop_box)
+        lb.setContentsMargins(6, 0, 4, 0)
+        lb.setSpacing(2)
+        title = QLabel("Loop")
+        title.setObjectName("loopTitle")
+        lb.addWidget(title)
+        self.btn_a = _tb("A", "Set loop start at the current frame ([)")
+        self.btn_b = _tb("B", "Set loop end at the current frame (])")
+        self.btn_loop = _tb("Off", "Turn the A–B loop on or off (Ctrl+L)")
         self.btn_loop.setCheckable(True)
-        for b in (self.btn_a, self.btn_b, self.btn_loop):
-            lay.addWidget(b)
+        self.btn_loop.setMinimumWidth(36)
+        self.loop_range = QLabel("not set")
+        self.loop_range.setObjectName("loopRange")
+        for w in (self.btn_a, self.btn_b, self.loop_range, self.btn_loop):
+            lb.addWidget(w)
+        lay.addWidget(self.loop_box)
         lay.addSpacing(10)
         lay.addWidget(QLabel("Speed"))
         self.speed = QComboBox()
@@ -400,7 +492,8 @@ class Transport(QWidget):
             self.frameEntered.emit(v)
 
     def update_state(self, current: int, total: int, fps: float, playing: bool, speed: float,
-                     loop_enabled: bool, show_frames: bool = True) -> None:
+                     loop_enabled: bool, show_frames: bool = True,
+                     loop_a: Optional[int] = None, loop_b: Optional[int] = None) -> None:
         self._updating = True
         self.frame_spin.setRange(0, max(0, total - 1))
         if not self.frame_spin.hasFocus():
@@ -417,3 +510,12 @@ class Transport(QWidget):
         else:
             self.speed.setEditText(f"{speed:g}×")
         self.btn_loop.setChecked(loop_enabled)
+        self.btn_loop.setText("On" if loop_enabled else "Off")
+
+        def tc(f):
+            return format_timecode(f / fps if fps else 0, fps, frame=f, show_frames=False)
+        if loop_a is None and loop_b is None:
+            self.loop_range.setText("not set")
+        else:
+            self.loop_range.setText(f"{tc(loop_a) if loop_a is not None else '—'} – "
+                                    f"{tc(loop_b) if loop_b is not None else '—'}")

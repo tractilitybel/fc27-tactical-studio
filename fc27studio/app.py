@@ -62,6 +62,9 @@ QCheckBox::indicator, QListWidget::indicator { width: 14px; height: 14px; border
 QCheckBox::indicator:checked, QListWidget::indicator:checked { background: #3d8bfd; border-color: #3d8bfd;
     image: none; }
 QToolButton#swatch { padding: 0; font-size: 9pt; }
+QFrame#loopBox { border: 1px solid #3a4352; border-radius: 6px; background: #1b1f27; }
+QLabel#loopTitle { color: #4aa3ff; font-weight: 700; padding-right: 4px; }
+QLabel#loopRange { color: #9aa6b4; padding: 0 4px; font-family: "Consolas", "Menlo", monospace; }
 QToolTip { background: #1d2128; color: #dfe4ea; border: 1px solid #3a424f; }
 """
 

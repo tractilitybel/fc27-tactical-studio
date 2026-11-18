@@ -316,3 +316,54 @@ def test_up_down_jump(qapp, win):
     win.prefs.jump_seconds = 5.0
     QTest.keyClick(win, Qt.Key_Up)
     assert wait_for(qapp, lambda: win.player.current == 149)  # clamped at the end
+
+
+def test_timeline_click_jumps_to_drawing_start(qapp, win):
+    win.set_workspace("tactics")
+    win.player.seek(60)
+    wait_for(qapp, lambda: win.canvas.frame == 60)
+    drag(qapp, win, Kind.RECT, (20, 20), (90, 90))
+    rect = win.doc.project.annotations[0]
+    win.player.seek(120)
+    wait_for(qapp, lambda: win.canvas.frame == 120)
+    tl = win.timeline
+    sp = next(s for s in tl.ranges if s.id == rect.id)
+    r = tl._span_rect(sp, tl.RULER_H + tl.MARK_H + 2)
+    QTest.mouseClick(tl, Qt.LeftButton, Qt.NoModifier, QPoint(int(r.left() + 3), int(r.center().y())))
+    assert wait_for(qapp, lambda: win.canvas.frame == 60)
+    assert wait_for(qapp, lambda: win.canvas.selection == {rect.id})
+
+
+def test_board_marker_on_timeline(qapp, win):
+    win.player.seek(90)
+    win.new_board()
+    board = win.current_board()
+    assert any(m.kind == "board" and m.id == board.id and m.frame == 90 for m in win.timeline.markers)
+    win.set_workspace("tactics")
+    win._on_marker_double_clicked(board.id)
+    assert win.workspace == "board"
+
+
+def test_loop_box_shows_range(qapp, win):
+    tr = win.transport
+    assert tr.loop_range.text() == "not set" and tr.btn_loop.text() == "Off"
+    win.player.seek(30)
+    win.set_loop_a()
+    win.player.seek(90)
+    win.set_loop_b()
+    qapp.processEvents()
+    assert tr.btn_loop.text() == "On"
+    assert tr.loop_range.text() == "00:01 – 00:03"
+
+
+def test_navigation_keys_reset_speed(qapp, win):
+    for key in (Qt.Key_Period, Qt.Key_Comma, Qt.Key_Right, Qt.Key_Left, Qt.Key_Up, Qt.Key_Down):
+        win.player.set_speed(2.0)
+        win.canvas.setFocus()
+        QTest.keyClick(win, key)
+        assert win.player.speed == 1.0, key
+    win.player.set_speed(0.5)
+    win.player.play()
+    QTest.keyClick(win, Qt.Key_Right)
+    assert win.player.playing and win.player.speed == 1.0
+    win.player.pause()

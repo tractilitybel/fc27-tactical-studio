@@ -29,7 +29,7 @@ from .panels import PropertiesPanel, TelestratorBar, ToolPalette
 from .playback import Player, ThumbnailWorker
 from .settings import (app_data_dir, qsettings, SHORTCUTS, Preferences, load_shortcuts, recovery_dir,
                        save_shortcuts)
-from .timeline import Marker, Timeline, Transport
+from .timeline import Marker, Span, Timeline, Transport
 
 VIDEO_FILTER = ("Video files (*.mp4 *.mkv *.mov *.avi *.webm *.m4v *.ts *.flv *.wmv);;"
                 "All files (*)")
@@ -299,10 +299,10 @@ class MainWindow(QMainWindow):
         A("play.reverse", lambda: self.player.jkl("j"))
         A("play.pause", lambda: self.player.jkl("k"))
         A("play.forward", lambda: self.player.jkl("l"))
-        A("play.next_frame", lambda: self.player.step(1))
-        A("play.prev_frame", lambda: self.player.step(-1))
-        A("play.big_forward", lambda: self.player.seek(self.player.current + self._big_step()))
-        A("play.big_back", lambda: self.player.seek(self.player.current - self._big_step()))
+        A("play.next_frame", lambda: self._nav(lambda: self.player.step(1)))
+        A("play.prev_frame", lambda: self._nav(lambda: self.player.step(-1)))
+        A("play.big_forward", lambda: self._nav(lambda: self.player.seek(self.player.current + self._big_step())))
+        A("play.big_back", lambda: self._nav(lambda: self.player.seek(self.player.current - self._big_step())))
         A("play.jump_forward", lambda: self.jump_seconds(1))
         A("play.jump_back", lambda: self.jump_seconds(-1))
         A("play.start", lambda: self.player.seek(0))
@@ -447,8 +447,10 @@ class MainWindow(QMainWindow):
         tl = self.timeline
         tl.seekRequested.connect(self._timeline_seek)
         tl.hoverFrame.connect(self._request_hover_thumb)
-        tl.markerClicked.connect(self.bookmarks.select)
-        tl.markerDoubleClicked.connect(self.edit_bookmark)
+        tl.markerClicked.connect(self._on_marker_clicked)
+        tl.markerDoubleClicked.connect(self._on_marker_double_clicked)
+        tl.spanClicked.connect(self._on_span_clicked)
+        self.canvas.selectionChanged.connect(self._refresh_ranges)
         tr = self.transport
         tr.btn_start.clicked.connect(lambda: pl.seek(0))
         tr.btn_end.clicked.connect(lambda: pl.seek(pl.frame_count - 1))
@@ -539,6 +541,8 @@ class MainWindow(QMainWindow):
                 self.board_panel.show_boards(boards, self.current_board_id)
                 self.board_panel.show_board(self.doc.project.board(self.current_board_id), self.player.fps)
                 self.board_canvas.update()
+        if what == "boards":
+            self._refresh_markers()
         if what in ("board", "boards"):
             self.board_canvas.prune_selection()
             self.board_canvas.update()
@@ -564,14 +568,50 @@ class MainWindow(QMainWindow):
 
     def _refresh_markers(self) -> None:
         p = self.doc.project
-        self.timeline.set_markers([Marker(b.id, b.frame, b.end_frame, p.category_color(b.category),
-                                          f"{b.category}: {b.title}") for b in p.bookmarks])
+        markers = [Marker(b.id, b.frame, b.end_frame, p.category_color(b.category),
+                          f"{b.category}: {b.title}") for b in p.bookmarks]
+        markers += [Marker(bd.id, bd.linked_frame, None, "#ffffff",
+                           f"Tactics board: {bd.name} (double-click to open)", "board")
+                    for bd in p.boards if bd.linked_frame is not None]
+        self.timeline.set_markers(markers)
 
     def _refresh_ranges(self) -> None:
         sel = self.canvas.selection
-        anns = self.doc.project.annotations
-        shown = [a for a in anns if a.id in sel] if sel else anns
-        self.timeline.set_ranges([(a.start_frame, a.end_frame, a.color) for a in shown[:400]])
+        spans = []
+        for a in self.doc.project.annotations[:600]:
+            label = a.name or (a.text.split("\n")[0][:30] if a.kind == Kind.TEXT and a.text
+                               else Kind.LABELS.get(a.kind, a.kind))
+            spans.append(Span(a.id, a.start_frame, a.end_frame, a.color, label, a.id in sel))
+        self.timeline.set_ranges(spans)
+
+    def _on_span_clicked(self, aid: str) -> None:
+        """Timeline drawing bar: jump to the drawing's first frame and select it."""
+        a = self.doc.project.annotation(aid)
+        if a is None:
+            return
+        self.player.pause()
+        if self.canvas.frame == a.start_frame and self.canvas.image is not None:
+            self.canvas.set_selection({aid})
+        else:
+            self._pending_select = (a.start_frame, aid)
+        name = Kind.LABELS.get(a.kind, a.kind)
+        self.statusBar().showMessage(f"{name} — first frame "
+                                     f"{format_timecode(a.start_frame / self.player.fps, self.player.fps, frame=a.start_frame)}",
+                                     4000)
+
+    def _on_marker_clicked(self, mid: str) -> None:
+        if self.doc.project.board(mid) is not None:
+            self.player.pause()
+            self.select_board(mid)
+        else:
+            self.bookmarks.select(mid)
+
+    def _on_marker_double_clicked(self, mid: str) -> None:
+        if self.doc.project.board(mid) is not None:
+            self.select_board(mid)
+            self.set_workspace("board")
+        else:
+            self.edit_bookmark(mid)
 
     def _refresh_playlist(self) -> None:
         pl = self.telestrator.playlist
@@ -621,6 +661,10 @@ class MainWindow(QMainWindow):
     def _on_image(self, index: int, img: QImage) -> None:
         self.canvas.set_image(img)
         self.canvas.set_frame(index)
+        pending = getattr(self, "_pending_select", None)
+        if pending and pending[0] == index:
+            self._pending_select = None
+            self.canvas.set_selection({pending[1]})
         if self.workspace == "tactics" and not self.player.playing:
             self.properties.layers.refresh()
 
@@ -639,7 +683,8 @@ class MainWindow(QMainWindow):
     def _update_transport(self) -> None:
         pl = self.player
         self.transport.update_state(pl.current, pl.frame_count, pl.fps, pl.playing, pl.speed,
-                                    pl.loop_enabled, self.prefs.show_frame_numbers)
+                                    pl.loop_enabled, self.prefs.show_frame_numbers,
+                                    pl.loop_a, pl.loop_b)
 
     def _timeline_seek(self, frame: int) -> None:
         self.player.pause()
@@ -648,10 +693,18 @@ class MainWindow(QMainWindow):
     def toggle_play(self) -> None:
         self.player.toggle()
 
+    def _nav(self, move) -> None:
+        """Keyboard navigation (, . arrows) always returns playback speed to 1x."""
+        if self.player.is_open and self.player.speed != 1.0:
+            self.player.set_speed(1.0)
+        move()
+
     def jump_seconds(self, direction: int) -> None:
         """Up/Down: jump by the configured number of seconds (keeps playing if playing)."""
         if not self.player.is_open:
             return
+        if self.player.speed != 1.0:
+            self.player.set_speed(1.0)
         step = max(1, int(round(self.prefs.jump_seconds * self.player.fps)))
         self.player.seek(self.player.current + direction * step)
 

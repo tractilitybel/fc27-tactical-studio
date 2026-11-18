@@ -33,10 +33,15 @@ The window has four **workspaces** (buttons at the top, or F2 / F3 / F6 / F4):
 
 The frame box in the transport bar shows the exact frame number; type a number and press Enter to jump.
 
-**A/B loop** — press `[` at the start of a passage and `]` at the end; the loop turns on automatically.
+**A/B loop** — the boxed *Loop* controls in the transport bar repeat a section: press `[` (or **A**) at the
+start of a passage and `]` (or **B**) at the end; the loop turns on automatically and the box shows its
+times. On the timeline the section is shaded blue with **A** and **B** tags.
 Ctrl+L toggles it, `\` clears it. The loop is saved with the project.
 
-**Timeline** — click or drag to scrub. Hover to see a thumbnail. Ctrl+wheel zooms the timeline (useful for
+**Timeline** — click or drag to scrub. Each drawing (arrow, text, cut-out…) has a coloured bar under
+the bookmark flags; **click a bar to jump to the first frame of that drawing** (it is selected for
+editing). White squares mark tactics boards linked to a moment (double-click to open the board).
+Navigation keys (`,` `.` ← → ↑ ↓) always return playback to normal speed (1×). Hover to see a thumbnail. Ctrl+wheel zooms the timeline (useful for
 a 90-minute match), wheel scrolls it when zoomed. Coloured flags are bookmarks (click to jump, double-click
 to edit); the shaded blue area is the A/B loop; the thin bars under the flags show when drawings are visible.
 
