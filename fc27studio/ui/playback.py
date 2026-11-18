@@ -91,20 +91,22 @@ class ThumbnailWorker(QObject):
     def __init__(self, path: str, index: IndexData):
         super().__init__()
         self._path, self._index = path, index
-        self._queue: list[tuple[int, int]] = []  # (frame, width)
+        self._hover: list[tuple[int, int]] = []  # timeline hover: newest first, few kept
+        self._queue: list[tuple[int, int]] = []  # exact requests (bookmarks): never dropped
         self._cond = threading.Condition()
         self._stop = False
 
     def request(self, frame: int, width: int = 200, exact: bool = False, front: bool = False) -> None:
         with self._cond:
-            item = (frame, width if not exact else -width)
-            if item in self._queue:
-                return
-            if front:
-                self._queue.insert(0, item)
-                del self._queue[8:]
+            item = (frame, -width if exact else width)
+            if exact:
+                if item not in self._queue:
+                    self._queue.append(item)
             else:
-                self._queue.append(item)
+                if item in self._hover:
+                    self._hover.remove(item)
+                self._hover.insert(0, item)
+                del self._hover[3:]
             self._cond.notify()
 
     def stop(self) -> None:
@@ -120,11 +122,11 @@ class ThumbnailWorker(QObject):
             return
         while True:
             with self._cond:
-                while not self._queue and not self._stop:
+                while not self._queue and not self._hover and not self._stop:
                     self._cond.wait()
                 if self._stop:
                     break
-                frame, width = self._queue.pop(0)
+                frame, width = (self._hover or self._queue).pop(0)
             try:
                 if width < 0:
                     from ..core.video import downscale

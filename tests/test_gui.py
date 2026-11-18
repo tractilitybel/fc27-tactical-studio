@@ -234,12 +234,13 @@ def test_save_reopen_and_relink(qapp, win, tmp_path, bframe_video):
     proj = str(tmp_path / "game.fc27studio")
     assert win._save_to(proj)
     assert not win.doc.dirty
-    # Move the whole folder: video should be found next to the project.
+    # Close it (Windows cannot move open files), then move project + video
+    # together: the video should be found next to the project.
+    win.new_project()
     moved = tmp_path / "moved"
     moved.mkdir()
     shutil.move(proj, moved / "game.fc27studio")
     shutil.move(str(vid), moved / "match.mp4")
-    win.new_project()
     assert win.open_project(str(moved / "game.fc27studio"))
     assert win.player.is_open
     assert len(win.doc.project.annotations) == 1 and len(win.doc.project.bookmarks) == 1

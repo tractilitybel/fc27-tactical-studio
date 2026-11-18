@@ -101,6 +101,53 @@ def build_index(path: str) -> IndexData:
         container.close()
 
 
+INDEX_CACHE_VERSION = 1
+
+
+def load_or_build_index(path: str, cache_dir: Optional[str]) -> IndexData:
+    """Like build_index, but reuses a cached index for an unchanged file.
+
+    The cache key is the absolute path, size and modification time, so an
+    edited or replaced file is always re-indexed.
+    """
+    if not cache_dir:
+        return build_index(path)
+    import hashlib
+    import json
+    st = os.stat(path)
+    key = f"{os.path.abspath(path)}|{st.st_size}|{st.st_mtime_ns}|{INDEX_CACHE_VERSION}"
+    name = hashlib.sha1(key.encode("utf-8")).hexdigest() + ".npz"
+    cache_file = os.path.join(cache_dir, name)
+    try:
+        with np.load(cache_file) as data:
+            return IndexData(data["pts"].tolist(), data["keys"].tolist())
+    except (OSError, KeyError, ValueError):
+        pass
+    index = build_index(path)
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        tmp = cache_file + ".tmp.npz"
+        np.savez_compressed(tmp, pts=np.asarray(index.pts, np.int64),
+                            keys=np.asarray(index.keyframe_pts, np.int64))
+        os.replace(tmp, cache_file)
+        _prune_index_cache(cache_dir, keep=200)
+    except OSError:
+        pass
+    return index
+
+
+def _prune_index_cache(cache_dir: str, keep: int) -> None:
+    files = [os.path.join(cache_dir, f) for f in os.listdir(cache_dir) if f.endswith(".npz")]
+    if len(files) <= keep:
+        return
+    files.sort(key=os.path.getmtime)
+    for f in files[:-keep]:
+        try:
+            os.unlink(f)
+        except OSError:
+            pass
+
+
 class VideoSource:
     """Random-access, frame-exact reader for one video file."""
 
@@ -234,9 +281,18 @@ class VideoSource:
                 return cached
             if self._container is None:
                 self._open()
-            # Continue decoding if the target is just ahead of the decoder.
-            ahead = self._decoder is not None and \
-                self._last_decoded < index <= self._last_decoded + 12
+            # Continue decoding (instead of seeking) when no keyframe lies
+            # between the decoder position and the target: seeking could not
+            # land any closer, so continuing is always at least as fast.
+            ahead = False
+            if self._decoder is not None and self._last_decoded < index:
+                if index <= self._last_decoded + 2:
+                    ahead = True
+                else:
+                    target = self._pts[index]
+                    k = bisect.bisect_right(self._index.keyframe_pts, target) - 1
+                    key_pts = self._index.keyframe_pts[max(0, k)]
+                    ahead = key_pts <= self._pts[max(0, self._last_decoded)]
             if not ahead:
                 self._seek_to(index)
             for attempt in range(2):
@@ -256,6 +312,8 @@ class VideoSource:
                 if idx is None:
                     continue
                 self._last_decoded = idx
+                if idx < index - self._cache_limit:
+                    continue  # would be evicted before use; skip the conversion
                 img = frame.to_ndarray(format=format)
                 self._store(idx, img)
                 if idx >= index:

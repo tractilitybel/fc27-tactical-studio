@@ -17,14 +17,14 @@ from .. import APP_NAME, __version__
 from ..core import storage
 from ..core.document import Document
 from ..core.model import Bookmark, Kind, Project
-from ..core.video import IndexData, VideoError, VideoSource, build_index, format_timecode
+from ..core.video import IndexData, VideoError, VideoSource, format_timecode, load_or_build_index
 from .bookmarks import BookmarkDialog, BookmarkPanel, CategoriesDialog
 from .canvas import Canvas
 from .dialogs import (GotoDialog, PreferencesDialog, ShortcutCard, ShortcutsDialog, about_text)
 from .export import export_bookmark_images, export_bookmarks_csv, export_frame, compose, safe_name
 from .panels import PropertiesPanel, TelestratorBar, ToolPalette
 from .playback import Player, ThumbnailWorker
-from .settings import (qsettings, SHORTCUTS, Preferences, load_shortcuts, recovery_dir,
+from .settings import (app_data_dir, qsettings, SHORTCUTS, Preferences, load_shortcuts, recovery_dir,
                        save_shortcuts)
 from .timeline import Marker, Timeline, Transport
 
@@ -810,7 +810,8 @@ class MainWindow(QMainWindow):
     def load_video(self, path: str) -> bool:
         """Open *path* into the player for the current document."""
         try:
-            index = self._run_busy(f"Indexing {os.path.basename(path)}…", build_index, path)
+            index = self._run_busy(f"Indexing {os.path.basename(path)}…", load_or_build_index,
+                                   path, os.path.join(app_data_dir(), "index_cache"))
             src = self.player.open(path, self.prefs.cache_mb, self.prefs.decoder_threads, index=index)
         except (VideoError, OSError) as exc:
             QMessageBox.critical(self, "Cannot open video", str(exc))

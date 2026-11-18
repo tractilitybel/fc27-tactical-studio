@@ -1,3 +1,4 @@
+import os
 import random
 
 import pytest
@@ -71,3 +72,21 @@ def test_timecode():
     assert format_timecode(65.5, 30, frame=1965) == "01:05.15"
     assert format_timecode(3725, 60, frame=3725 * 60) == "01:02:05.00"
     assert format_timecode(5.0, show_frames=False) == "00:05"
+
+
+def test_index_cache(bframe_video, tmp_path):
+    from fc27studio.core.video import build_index, load_or_build_index
+    cache = str(tmp_path / "idx")
+    a = load_or_build_index(bframe_video, cache)
+    assert len(os.listdir(cache)) == 1
+    b = load_or_build_index(bframe_video, cache)
+    ref = build_index(bframe_video)
+    assert a.pts == b.pts == ref.pts and a.keyframe_pts == b.keyframe_pts == ref.keyframe_pts
+
+
+def test_fast_forward_skipping_stays_exact(bframe_video):
+    with VideoSource(bframe_video, cache_frames=8) as v:
+        for i in range(0, v.frame_count, 7):   # like 4x playback dropping frames
+            assert decode_frame_number(v.frame(i)) == i
+        for i in range(3, v.frame_count, 23):
+            assert decode_frame_number(v.frame(i)) == i
