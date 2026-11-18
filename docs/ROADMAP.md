@@ -14,12 +14,11 @@ formation presets, ball, distance measurement in metres, multiple boards linked 
 calibrated (click four known pitch points). That goes with tracking in Milestone 4, which needs the same
 calibration. On the tactics board, distances are already exact.
 
-## Milestone 3 — Sequences and video output
-- Freeze-frame sequences: pause automatically at a moment, show drawings, resume
-- Keyframe animation of drawings (arrows that extend, moving spotlights)
-- Export clips and full analysis videos (MP4) with drawings burned in
-- Voice-over commentary recorded against the timeline
-- (Sound playback was brought forward and shipped in 1.3.)
+## ✅ Milestone 3 — Sequences and video output (1.4)
+Sound like YouTube (1.3); freeze frames that pause playback with a countdown; animated drawings
+(keyframed movement with easing, draw-on reveal); MP4 export of sections and highlight reels with
+title cards, drawings, animations, freezes, game sound and commentary; voice commentary recording
+with automatic ducking.
 
 ## Milestone 4 — Tracking
 - Pitch calibration (four known pitch points) for real distances and angles on the video

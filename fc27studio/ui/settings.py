@@ -24,6 +24,7 @@ class Preferences:
     big_step_seconds: float = 1.0    # Left/Right
     jump_seconds: float = 5.0        # Up/Down
     freeze_seconds: float = 3.0
+    mute_game_while_recording: bool = True
     play_freezes: bool = True
     volume: float = 1.0
     muted: bool = False
@@ -98,6 +99,7 @@ SHORTCUTS: dict[str, tuple[str, str, str]] = {
     "file.export_frame": ("File", "Export frame image", "Ctrl+E"),
     "file.copy_frame": ("File", "Copy frame to clipboard", "Ctrl+Shift+C"),
     "file.export_compare": ("File", "Export before/after image", "Ctrl+Shift+E"),
+    "file.export_video": ("File", "Export video (MP4)…", "Ctrl+Alt+E"),
     "file.quit": ("File", "Quit", "Ctrl+Q"),
     # Edit
     "edit.undo": ("Edit", "Undo", "Ctrl+Z"),
@@ -138,6 +140,7 @@ SHORTCUTS: dict[str, tuple[str, str, str]] = {
     "play.goto": ("Playback", "Go to time / frame…", "Ctrl+J"),
     "play.mute": ("Playback", "Mute / unmute sound", "M"),
     "play.add_freeze": ("Playback", "Add freeze frame here", "F"),
+    "play.record": ("Playback", "Record voice commentary (start/stop)", "R"),
     # Bookmarks
     "bm.add": ("Bookmarks", "Add bookmark", "B"),
     "bm.add_detailed": ("Bookmarks", "Add bookmark with details…", "Shift+B"),

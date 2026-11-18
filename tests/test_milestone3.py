@@ -209,3 +209,143 @@ def test_reveal_setting_from_panel(qapp, win):
     a = win.doc.project.annotations[0]
     win.properties.reveal_s.setValue(1.0)
     assert a.reveal_frames == 30
+
+
+# ------------------------------------------------------------------ export
+from conftest import decode_frame_number  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def av_video(tmp_path_factory):
+    from test_audio import make_av_video
+    return make_av_video(str(tmp_path_factory.mktemp("m3") / "src.mp4"), seconds=4)
+
+
+def read_video(path):
+    import av
+    c = av.open(path)
+    frames = [f.to_ndarray(format="rgb24") for f in c.decode(c.streams.video[0])]
+    c.close()
+    c = av.open(path)
+    audio = np.concatenate([f.to_ndarray().T.reshape(-1, 2) if f.format.is_packed else f.to_ndarray().T
+                            for f in c.decode(c.streams.audio[0])]) if c.streams.audio else None
+    c.close()
+    return frames, audio
+
+
+def dominant(x, rate=48000):
+    f = np.abs(np.fft.rfft(x * np.hanning(len(x))))
+    return np.argmax(f) * rate / len(x)
+
+
+def test_export_section_with_drawing_freeze_and_sound(qapp, av_video, tmp_path):
+    from fc27studio.core.video import build_index
+    from fc27studio.ui.video_export import ExportOptions, Segment, VideoExporter
+    p = Project()
+    p.freezes.append(Freeze(45, 1.0))
+    p.annotations.append(Annotation(Kind.RECT, [(200, 20), (300, 160)], 30, 60, color="#ff0000",
+                                    fill_opacity=0.6))
+    out = str(tmp_path / "sec.mp4")
+    VideoExporter(p, av_video, build_index(av_video), ExportOptions(out)).run([Segment(30, 59)])
+    frames, audio = read_video(out)
+    assert len(frames) == 30 + 30
+    nums = [decode_frame_number(f) for f in frames]
+    assert nums[:16] == list(range(30, 46)) and nums[16:46] == [45] * 30 and nums[46] == 46
+    assert frames[0][90, 250, 0] > 150                 # red drawing burned in
+    assert abs(len(audio) / 48000 - 2.0) < 0.05        # sound as long as the video
+    # silence during the freeze, game sound before it
+    assert np.abs(audio[int(0.6 * 48000):int(1.4 * 48000)]).max() < 0.02
+    assert np.abs(audio[int(0.1 * 48000):int(0.4 * 48000)]).max() > 0.2
+
+
+def test_export_reel_with_title_cards(qapp, av_video, tmp_path):
+    from fc27studio.core.model import Bookmark
+    from fc27studio.core.video import build_index
+    from fc27studio.ui.video_export import ExportOptions, VideoExporter, bookmark_segments
+    bms = [Bookmark(30, "Press", "Pressing", end_frame=44), Bookmark(90, "Goal", "Goal")]
+    segs = bookmark_segments(bms, 30.0, 120, before=0.5, after=0.5)
+    assert [(s.start, s.end) for s in segs] == [(30, 44), (75, 105)]
+    out = str(tmp_path / "reel.mp4")
+    VideoExporter(Project(), av_video, build_index(av_video),
+                  ExportOptions(out, title_seconds=1.0, sound=False)).run(segs)
+    frames, audio = read_video(out)
+    assert audio is None
+    assert len(frames) == 30 + 15 + 30 + 31
+    assert decode_frame_number(frames[30]) == 30 and decode_frame_number(frames[75]) == 75
+
+
+def test_export_downscale(qapp, av_video, tmp_path):
+    from fc27studio.core.video import build_index
+    from fc27studio.ui.video_export import ExportOptions, Segment, VideoExporter
+    out = str(tmp_path / "small.mp4")
+    VideoExporter(Project(), av_video, build_index(av_video),
+                  ExportOptions(out, height=90, sound=False)).run([Segment(0, 9)])
+    frames, _ = read_video(out)
+    assert frames[0].shape[:2] == (90, 160)
+
+
+# --------------------------------------------------------------- commentary
+def test_mixer_ducks_and_mixes(tmp_path):
+    from fc27studio.core.commentary import DUCK_LEVEL, CommentaryMixer, read_wav, write_wav
+    voice = (0.5 * np.sin(2 * np.pi * 220 * np.arange(48000) / 48000)).astype(np.float32)
+    write_wav(str(tmp_path / "v.wav"), voice)
+    assert np.allclose(read_wav(str(tmp_path / "v.wav")), voice, atol=1e-3)
+    p = Project()
+    p.commentary.append(Commentary(30, "v.wav", 1.0))
+    mix = CommentaryMixer(p, str(tmp_path), 30.0)
+    game = np.full((48000 * 3, 2), 0.2, np.float32)
+    out = mix(0.0, game)
+    assert abs(out[24000, 0] - 0.2) < 1e-6                      # before: untouched
+    mid = out[48000 + 24000 - 200:48000 + 24000 + 200, 0] - 0.2 * DUCK_LEVEL
+    assert abs(dominant(mid) - 220) < 130 or np.abs(mid).max() > 0.3   # voice present
+    assert abs(out[int(1.5 * 48000) + 1, 0] - (0.2 * DUCK_LEVEL + voice[24001] * 1.0)) < 1e-4
+    assert abs(out[int(2.9 * 48000), 0] - 0.2) < 1e-6           # after: back to normal
+    p.duck_game_audio = False
+    assert abs(mix(0.0, game)[int(1.5 * 48000) + 1, 0] - (0.2 + voice[24001])) < 1e-4
+
+
+def test_commentary_in_export(qapp, av_video, tmp_path):
+    from fc27studio.core.commentary import CommentaryMixer, write_wav
+    from fc27studio.core.video import build_index
+    from fc27studio.ui.video_export import ExportOptions, Segment, VideoExporter
+    voice = (0.5 * np.sin(2 * np.pi * 1500 * np.arange(48000) / 48000)).astype(np.float32)
+    write_wav(str(tmp_path / "c.wav"), voice)
+    p = Project()
+    p.commentary.append(Commentary(30, "c.wav", 1.0))
+    out = str(tmp_path / "comm.mp4")
+    VideoExporter(p, av_video, build_index(av_video), ExportOptions(out),
+                  CommentaryMixer(p, str(tmp_path), 30.0)).run([Segment(0, 89)])
+    _, audio = read_video(out)
+    during = audio[int(1.3 * 48000):int(1.6 * 48000), 0]
+    after = audio[int(2.4 * 48000):int(2.7 * 48000), 0]
+    assert abs(dominant(during) - 1500) < 40          # the voice is in the export
+    assert abs(dominant(after) - 500) < 40            # game tone (2 s → 500 Hz) after it
+
+
+def test_record_commentary_in_app(qapp, win, tmp_path):
+    from fc27studio.ui.recorder import FakeInput, Recorder
+    (tmp_path / "proj").mkdir()
+    assert win._save_to(str(tmp_path / "proj" / "game.fc27studio"))
+    win.recorder = Recorder(FakeInput)
+    win.player.seek(10)
+    win.toggle_record()
+    assert win.player.playing and win.transport.btn_rec.isChecked()
+    pump(qapp, 1.0)
+    win.toggle_record()
+    assert not win.player.playing and not win.audio.suppress
+    clips = win.doc.project.commentary
+    assert len(clips) == 1 and clips[0].frame == 10 and 0.7 < clips[0].seconds < 1.5
+    from fc27studio.core.commentary import resolve
+    assert (tmp_path / "proj" / clips[0].file).is_file()
+    assert any(m.kind == "voice" for m in win.timeline.markers)
+    assert win.audio.mixer is not None
+    # Save As elsewhere carries the recording along
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    assert win._save_to(str(other / "copy.fc27studio"))
+    assert (other / win.doc.project.commentary[0].file).is_file()
+    # Pausing also stops a recording
+    win.toggle_record()
+    pump(qapp, 0.5)
+    win.player.pause()
+    assert getattr(win, "_rec", None) is None and len(win.doc.project.commentary) == 2

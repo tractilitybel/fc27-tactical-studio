@@ -22,12 +22,17 @@ fc27studio/
     imaging.py          PNG codec, polygon masks, mask→outline tracing, cut-outs, background fill
     segment.py          AI player selection (MobileSAM via ONNX Runtime)
     audio.py            audio decode (any start time), WSOLA time-stretch, background audio engine
+    animation.py        keyframe interpolation (eased), draw-on reveal, posing drawings per frame
+    commentary.py       WAV I/O and the commentary mixer with ducking
   ui/
     main_window.py      window, workspaces, menus/actions, file handling, exports, autosave
     canvas.py           video display + drawing/editing interaction
     render.py           QPainter rendering of annotations (shared by canvas and export)
     playback.py         decode thread, thumbnail thread, Player (clock, speed, loop, J/K/L)
     audio_out.py        sound card output (sounddevice) and picture/sound sync
+    recorder.py         microphone capture for commentary
+    video_export.py     MP4 rendering (sections, reels, title cards, freezes, audio)
+    export_dialog.py    export options and background export
     timeline.py         timeline widget and transport bar
     bookmarks.py        incident list, bookmark/category dialogs
     panels.py           tool palette, drawing properties, layers, telestrator bar
@@ -91,6 +96,23 @@ UI thread ── hover/bookmark thumbs ─▶ ThumbnailWorker thread (own VideoS
   sound card's clock every 40 ms (it follows the sound), and seeks or loop wraps (`Player.seeked`)
   restart the sound at the new position with a 5 ms fade-in. With no audio device, playback is silent
   and everything else works.
+
+## Milestone 3 internals
+
+- **Freeze frames**: the Player checks, each tick, whether playback crossed a freeze frame; it then
+  holds that frame (the sound stops), reports the countdown, and afterwards re-bases its clock on that
+  frame and emits `seeked` so the sound restarts there. Each freeze fires once per pass.
+- **Animation**: keyframes store points + rotation; `posed(a, frame)` interpolates with smoothstep
+  easing (rotation the short way round) and applies draw-on by shortening line-like drawings (curved
+  arrows are re-fitted to the partial curve) or fading others. The canvas writes the pose into the
+  drawing for the frame on screen, so selecting and dragging act on what you see; finishing a drag on
+  an animated drawing stores a keyframe at that frame inside the same undo step.
+- **Export**: frames are decoded sequentially, drawings posed and rendered at full resolution, scaled,
+  and encoded with libx264 (CRF). Audio is generated per output frame — exactly `RATE / fps` samples
+  each, from the game track (with commentary mixed in) for media frames and silence for title cards
+  and freeze holds — so picture and sound cannot drift.
+- **Commentary**: mono 48 kHz WAVs next to the project; the mixer adds them at media time *before*
+  time-stretching (so the voice keeps its pitch at any speed) and ducks the game with 120 ms ramps.
 
 ## Data model and undo
 
@@ -170,7 +192,7 @@ images match the screen exactly. Spotlights are painted first so they darken the
 
 ## Testing
 
-`python -m pytest -q tests` (94 tests):
+`python -m pytest -q tests` (110 tests):
 
 - `test_video.py` — frame accuracy (B-frames, MPEG-4, random/backward/keyframe boundaries, frame-skipping playback), index cache, timecodes
 - `test_document.py` — undo/redo, merging, layering, grouping, bookmarks, geometry/hit tests, project I/O,
@@ -191,5 +213,10 @@ images match the screen exactly. Spotlights are painted first so they darken the
 - `test_audio.py` — exact audio seeking (tones that change every second), second audio track,
   pitch kept at 0.25–4×, engine timing at 2×, YouTube rules with the real player, seek and loop resync,
   picture/sound drift under 60 ms, no-device fallback, mute key and volume
+
+- `test_milestone3.py` — keyframe maths and easing, draw-on, undoable keyframe edits, freeze holds in
+  the player and in the app (F key, Space), MP4 export (exact frames, burned-in drawings, freeze holds
+  with silence, sound length, title cards, downscaling), commentary mixing/ducking, commentary in export,
+  recording with a test microphone and carrying recordings on Save As
 
 `FC27TacticalStudio.exe --selfcheck` runs a smoke test inside the packaged build (used by CI).

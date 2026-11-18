@@ -186,6 +186,7 @@ class AudioEngine:
         self.start_time = 0.0
         self.samples_out = 0      # samples handed to the sound card since start()
         self._fade = 0
+        self.mixer = None         # callable(media_t0, block) -> block (voice commentary)
 
     # ---------------------------------------------------------------- control
     def start(self, seconds: float, speed: float) -> None:
@@ -240,6 +241,7 @@ class AudioEngine:
                 self._lock.notify_all()
             return
         stretch = None if abs(speed - 1.0) < 1e-3 else TimeStretcher()
+        media = seconds
         try:
             dec.seek(seconds)
             while True:
@@ -256,6 +258,12 @@ class AudioEngine:
                         self._eof = True
                         self._lock.notify_all()
                     return
+                if self.mixer is not None:
+                    try:
+                        block = self.mixer(media, block)   # commentary at media time, before stretching
+                    except Exception:
+                        pass
+                media += len(block) / RATE
                 if stretch is not None:
                     block = stretch.process(block, speed)
                 self._push(gen, block)

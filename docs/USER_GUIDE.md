@@ -169,7 +169,40 @@ temporary: they disappear when playback starts (configurable) or when you press 
 **F5** starts presentation mode: full screen, only the video, timeline and transport. Esc or F5 leaves it.
 The *Incident playlist* jumps straight to each bookmark.
 
-## 9. Exporting
+## 9. Freeze frames, animation, commentary and video
+
+**Freeze frames.** Press **F** on a moment: when playback reaches it, the video pauses for 3 seconds
+(a countdown shows top right), then continues, like a TV analyst stopping the action. Draw on that
+frame and the drawings are shown during the pause. Double-click the blue ❚❚ marker on the timeline to
+change the length, add a note or delete it. *Playback → Play freeze frames* turns them all on/off;
+**Space** during a freeze continues straight away.
+
+**Animated drawings** (Drawing panel → *Animation*):
+- **Draw-on**: set e.g. 1 s and arrows, runs and lines draw themselves from start to tip (others fade in).
+- **Moving drawings**: select a drawing, press **◆ Keyframe here**, go to a later frame and drag it to
+  the new position — it glides smoothly between the two. Every further drag at another frame adds a
+  keyframe. ◀ ▶ jump between keyframes; *Remove here* / *Stop moving* undo the animation. Keyframes
+  show as white diamonds on the drawing's timeline bar. Works for spotlights, circles, zones, text,
+  arrows and player cut-outs.
+
+**Voice commentary.** Press **R** (or the red ● button): the video plays and your microphone records
+until you press **R** again or pause. The clip is saved next to your project (save the project first)
+and shows as a purple bar on the timeline; double-click it to rename, change its volume or delete it.
+Game sound is muted while recording (so it doesn't leak into the mic — turn this off under *Playback*
+if you use headphones) and is automatically lowered under your voice during playback and export
+(*Playback → Lower game sound under commentary*).
+
+**Export video** (*File → Export → Export video*, **Ctrl+Alt+E**, or *Export video of these incidents*
+under the Incidents list):
+- *A section*: the whole video, the A–B loop or a custom range.
+- *Highlights reel*: the incidents shown in the list (or the ones you selected), each with a title card
+  and a few seconds before/after (bookmarks with a clip end use exactly that range) — as one video or one
+  file per incident.
+- Choose resolution (original, 1080p, 720p, 480p), quality, and whether to include drawings and
+  animations, freeze frames, game sound and commentary. The result is a standard MP4 (H.264 + AAC) that
+  plays on any PC or phone and uploads to YouTube, Discord or WhatsApp.
+
+## 10. Exporting images
 
 - *File → Export → Export frame image* (Ctrl+E): PNG or JPG at the video's full resolution, with drawings.
 - *Export clean frame*: the same without drawings.
@@ -177,7 +210,7 @@ The *Incident playlist* jumps straight to each bookmark.
 - *Export bookmark images*: one image per bookmark (respects the current search/filter).
 - *Export bookmark list (CSV)*: opens in Excel or Google Sheets.
 
-## 10. Safety: saving, autosave and recovery
+## 11. Safety: saving, autosave and recovery
 
 - Saving is atomic, and the previous version is kept as `yourproject.fc27studio.bak`. If a project file is
   ever damaged, the backup is opened automatically and you are told about it.
@@ -187,7 +220,7 @@ The *Incident playlist* jumps straight to each bookmark.
 - If the video was moved or renamed you are asked to locate it (*File → Relink video…* works at any time).
   Bookmarks and drawings are kept. You are warned if the new file has a different length or resolution.
 
-## 11. Preferences and shortcuts
+## 12. Preferences and shortcuts
 
 *Edit → Preferences* (Ctrl+,): frame cache size, decoder threads, frame dropping, autosave interval,
 default drawing duration, jump size, timecode format, timeline thumbnails, telestrator behaviour,
@@ -196,7 +229,7 @@ JPG quality.
 *Edit → Keyboard shortcuts…*: reassign any shortcut; conflicts are flagged. Press **F1** for a printable
 reference card of the current shortcuts.
 
-## 12. Performance tips
+## 13. Performance tips
 
 - 1080p60 plays in real time on any recent PC. For 4K60 recordings enable *Drop frames to keep real-time
   speed* (on by default); frame stepping is always exact regardless.
@@ -205,7 +238,7 @@ reference card of the current shortcuts.
 - Recordings with very long keyframe intervals (some capture tools use 10 s or more) make random seeks
   slower. If seeking feels slow, set your capture software to a 1–2 second keyframe interval.
 
-## 13. Troubleshooting
+## 14. Troubleshooting
 
 | Problem | Fix |
 |---|---|

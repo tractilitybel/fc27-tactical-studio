@@ -229,6 +229,18 @@ class Timeline(QWidget):
                 continue
             x = self._x_of(m.frame)
             c = QColor(m.color)
+            if m.kind == "voice":
+                xe = self._x_of(min(m.end or m.frame, self.v1))
+                bar = QRectF(x, mark_top + 3, max(4.0, xe - x), 9)
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(180, 108, 255, 200))
+                p.drawRoundedRect(bar, 3, 3)
+                p.setPen(QColor(255, 255, 255))
+                f = QFont(self.font())
+                f.setPointSizeF(max(6.5, f.pointSizeF() - 2.5))
+                p.setFont(f)
+                p.drawText(bar.adjusted(3, -2, 0, 2), Qt.AlignLeft | Qt.AlignVCenter, "🎙")
+                continue
             if m.kind == "freeze":
                 p.setPen(Qt.NoPen)
                 p.setBrush(QColor(0, 199, 255))
@@ -432,6 +444,7 @@ def _tb(text: str, tip: str) -> QToolButton:
     b.setToolTip(tip)
     b.setAutoRaise(True)
     b.setMinimumWidth(30)
+    b.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)   # never squeeze into "…"
     return b
 
 
@@ -460,14 +473,14 @@ class Transport(QWidget):
         lay.addSpacing(10)
         self.timecode = QLabel("00:00.00 / 00:00.00")
         self.timecode.setObjectName("timecode")
-        self.timecode.setMinimumWidth(170)
+        self.timecode.setMinimumWidth(150)
         lay.addWidget(self.timecode)
-        lay.addSpacing(10)
-        lay.addWidget(QLabel("Frame"))
+        lay.addSpacing(6)
         self.frame_spin = QSpinBox()
         self.frame_spin.setRange(0, 0)
         self.frame_spin.setKeyboardTracking(False)
-        self.frame_spin.setMinimumWidth(90)
+        self.frame_spin.setFixedWidth(104)
+        self.frame_spin.setPrefix("Frame ")
         self.frame_spin.setObjectName("frameBox")  # arrow buttons hidden via the stylesheet
         self.frame_spin.setToolTip("Exact frame number of the picture on screen.\n"
                                    "Type a number and press Enter to jump to it.")
@@ -497,20 +510,24 @@ class Transport(QWidget):
         lay.addWidget(self.loop_box)
         lay.addSpacing(10)
         from PySide6.QtWidgets import QSlider
+        self.btn_rec = _tb("●", "Record voice commentary (R) — the video plays while you talk")
+        self.btn_rec.setObjectName("recButton")
+        self.btn_rec.setCheckable(True)
+        lay.addWidget(self.btn_rec)
         self.btn_mute = _tb("🔊", "Mute / unmute (M)")
         self.volume = QSlider(Qt.Horizontal)
         self.volume.setRange(0, 100)
         self.volume.setValue(100)
-        self.volume.setFixedWidth(80)
+        self.volume.setFixedWidth(64)
         self.volume.setToolTip("Volume")
         lay.addWidget(self.btn_mute)
         lay.addWidget(self.volume)
-        lay.addSpacing(10)
-        lay.addWidget(QLabel("Speed"))
+        lay.addSpacing(6)
         self.speed = QComboBox()
         for s in SPEEDS:
             self.speed.addItem(f"{s:g}×", s)
         self.speed.setCurrentIndex(SPEEDS.index(1.0))
+        self.speed.setToolTip("Playback speed (− / = / 0 for normal)")
         self.speed.activated.connect(lambda i: self.speedChosen.emit(self.speed.itemData(i)))
         lay.addWidget(self.speed)
         self._updating = False
@@ -559,7 +576,9 @@ class Transport(QWidget):
         def tc(f):
             return format_timecode(f / fps if fps else 0, fps, frame=f, show_frames=False)
         if loop_a is None and loop_b is None:
-            self.loop_range.setText("not set")
+            self.loop_range.setText("")
+            self.loop_range.setVisible(False)
         else:
+            self.loop_range.setVisible(True)
             self.loop_range.setText(f"{tc(loop_a) if loop_a is not None else '—'} – "
                                     f"{tc(loop_b) if loop_b is not None else '—'}")

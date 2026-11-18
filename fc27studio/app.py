@@ -65,6 +65,11 @@ QToolButton#swatch { padding: 0; font-size: 9pt; }
 QFrame#loopBox { border: 1px solid #3a4352; border-radius: 6px; background: #1b1f27; }
 QLabel#loopTitle { color: #4aa3ff; font-weight: 700; padding-right: 4px; }
 QLabel#loopRange { color: #9aa6b4; padding: 0 4px; font-family: "Consolas", "Menlo", monospace; }
+QRadioButton::indicator { width: 14px; height: 14px; border: 1px solid #56606e; border-radius: 8px;
+    background: #0f1216; }
+QRadioButton::indicator:checked { background: #3d8bfd; border: 3px solid #0f1216; outline: none; }
+QToolButton#recButton { color: #ff4d4d; font-size: 13pt; }
+QToolButton#recButton:checked { background: #7a1f1f; border-color: #ff4d4d; color: #ffffff; }
 QToolTip { background: #1d2128; color: #dfe4ea; border: 1px solid #3a424f; }
 """
 
@@ -131,6 +136,17 @@ def selfcheck() -> int:
             assert comp.width() == 160
         w = MainWindow()
         w.close()
+        # MP4 export (H.264 + AAC) inside the packaged app
+        from .core.model import Project, Freeze
+        from .core.video import build_index
+        from .ui.video_export import ExportOptions, Segment, VideoExporter
+        proj = Project()
+        proj.freezes.append(Freeze(5, 0.2))
+        out_mp4 = os.path.join(d, "export.mp4")
+        VideoExporter(proj, path, build_index(path), ExportOptions(out_mp4, sound=False)).run([Segment(0, 9)])
+        with av.open(out_mp4) as c:
+            n = sum(1 for _ in c.decode(c.streams.video[0]))
+        assert n == 15, f"export produced {n} frames"
     from .core import segment
     ai = "unavailable"
     model_dir = segment.find_model_dir()
@@ -157,7 +173,7 @@ def selfcheck() -> int:
             sound = "ok (no device)"
     except Exception as exc:
         raise AssertionError(f"sound library missing: {exc}")
-    print(f"{APP_NAME} {__version__} selfcheck OK (codec {codec}, PyAV {av.__version__}, AI {ai}, sound {sound})")
+    print(f"{APP_NAME} {__version__} selfcheck OK (codec {codec}, PyAV {av.__version__}, AI {ai}, sound {sound}, export ok)")
     return 0
 
 

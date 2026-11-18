@@ -197,6 +197,7 @@ class BookmarkPanel(QWidget):
     deleteRequested = Signal(list)
     thumbnailWanted = Signal(int)
     categoriesRequested = Signal()
+    exportVideoRequested = Signal(list)   # bookmark ids (selected, or all shown)
 
     SORTS = ["Time", "Category", "Importance", "Recently added", "Title"]
 
@@ -252,6 +253,10 @@ class BookmarkPanel(QWidget):
         for b in (b_add, b_edit, b_del, b_cat):
             btns.addWidget(b)
         lay.addLayout(btns)
+        b_vid = QPushButton("Export video of these incidents…")
+        b_vid.setToolTip("Make a highlights video (MP4) of the selected incidents, or of all incidents shown")
+        b_vid.clicked.connect(self._export_video)
+        lay.addWidget(b_vid)
         self._items: dict[str, QListWidgetItem] = {}
 
     def set_document(self, doc: Optional[Document], fps: float) -> None:
@@ -366,6 +371,11 @@ class BookmarkPanel(QWidget):
         b = self.doc.project.bookmark(it.data(Qt.UserRole)) if self.doc else None
         if b is not None:
             self.jumpRequested.emit(b.frame)
+
+    def _export_video(self) -> None:
+        sel = [it.data(Qt.UserRole) for it in self.list.selectedItems()]
+        ids = sel if len(sel) > 1 else [b.id for b in self.filtered()]
+        self.exportVideoRequested.emit(ids)
 
     def _edit_current(self) -> None:
         it = self.list.currentItem()

@@ -285,6 +285,7 @@ class MainWindow(QMainWindow):
         A("file.save_as", self.save_as)
         A("file.export_frame", self.export_frame_dialog)
         A("file.copy_frame", self.copy_frame)
+        A("file.export_video", self.export_video_dialog)
         A("file.quit", self.close)
         A("edit.undo", lambda: self.doc.undo.undo())
         A("edit.redo", lambda: self.doc.undo.redo())
@@ -321,6 +322,7 @@ class MainWindow(QMainWindow):
         A("play.goto", self.goto_dialog)
         A("play.mute", self.toggle_mute)
         A("play.add_freeze", self.add_freeze)
+        A("play.record", self.toggle_record)
         self.act_play_freezes = QAction("Play freeze frames", self)
         self.act_play_freezes.setCheckable(True)
         self.act_play_freezes.setChecked(self.prefs.play_freezes)
@@ -373,6 +375,8 @@ class MainWindow(QMainWindow):
         f.addAction(a["file.save_as"])
         f.addSeparator()
         ex = f.addMenu("Export")
+        ex.addAction(a["file.export_video"])
+        ex.addSeparator()
         ex.addAction(a["file.export_frame"])
         ex.addAction("Export clean frame (no drawings)…", lambda: self.export_frame_dialog(False))
         ex.addAction(a["file.export_compare"])
@@ -432,6 +436,19 @@ class MainWindow(QMainWindow):
         p.addAction(a["play.add_freeze"])
         p.addAction(self.act_play_freezes)
         p.addSeparator()
+        p.addAction(a["play.record"])
+        self.act_mute_rec = QAction("Mute game sound while recording", self)
+        self.act_mute_rec.setCheckable(True)
+        self.act_mute_rec.setChecked(self.prefs.mute_game_while_recording)
+        self.act_mute_rec.toggled.connect(lambda v: (setattr(self.prefs, "mute_game_while_recording", v),
+                                                     self.prefs.save()))
+        p.addAction(self.act_mute_rec)
+        self.act_duck = QAction("Lower game sound under commentary", self)
+        self.act_duck.setCheckable(True)
+        self.act_duck.triggered.connect(lambda v: self.doc.set_project_fields(
+            "Commentary ducking", duck_game_audio=bool(v)))
+        p.addAction(self.act_duck)
+        p.addSeparator()
         p.addAction(a["play.mute"])
         self.track_menu = p.addMenu("Audio track")
         self.track_menu.aboutToShow.connect(self._fill_track_menu)
@@ -485,6 +502,8 @@ class MainWindow(QMainWindow):
         tr.speedChosen.connect(pl.set_speed)
         pl.freezeChanged.connect(self._on_freeze_changed)
         self.properties.seek_request = lambda f: (pl.pause(), pl.seek(f))
+        tr.btn_rec.clicked.connect(self.toggle_record)
+        pl.stateChanged.connect(self._stop_record_if_paused)
         tr.btn_mute.clicked.connect(self.toggle_mute)
         tr.volume.valueChanged.connect(self._volume_changed)
         tr.volume.sliderReleased.connect(self.prefs.save)
@@ -524,6 +543,7 @@ class MainWindow(QMainWindow):
         bp.deleteRequested.connect(self.delete_bookmarks)
         bp.thumbnailWanted.connect(self._request_bm_thumb)
         bp.categoriesRequested.connect(self.edit_categories)
+        bp.exportVideoRequested.connect(self.export_reel)
         te = self.telestrator
         te.clearRequested.connect(cv.clear_telestrator)
         te.keepToggled.connect(lambda v: setattr(cv, "persist_telestrator", v))
@@ -541,6 +561,7 @@ class MainWindow(QMainWindow):
         self.current_board_id = None
         self.select_board(doc.project.boards[0].id if doc.project.boards else None)
         self._sync_freezes()
+        self._refresh_mixer()
         self._on_doc_changed("bookmarks")
         self._on_doc_changed("annotations")
         self._on_undo_changed()
@@ -572,6 +593,9 @@ class MainWindow(QMainWindow):
         if what in ("freezes", "project"):
             self._refresh_markers()
             self._sync_freezes()
+        if what in ("commentary", "project"):
+            self._refresh_markers()
+            self._refresh_mixer()
         if what in ("board", "boards"):
             self.board_canvas.prune_selection()
             self.board_canvas.update()
@@ -600,6 +624,9 @@ class MainWindow(QMainWindow):
         markers = [Marker(b.id, b.frame, b.end_frame, p.category_color(b.category),
                           f"{b.category}: {b.title}") for b in p.bookmarks]
         fps = self.player.fps or 30.0
+        markers += [Marker(c.id, c.frame, c.frame + int(c.seconds * fps), "#b46cff",
+                           f"Commentary: {c.name or 'voice'} ({c.seconds:.1f} s) — double-click to edit", "voice")
+                    for c in p.commentary]
         markers += [Marker(f.id, f.frame, None, "#00c7ff",
                            f"Freeze {f.seconds:g} s" + (f" — {f.note}" if f.note else "") +
                            " (double-click to edit)", "freeze") for f in p.freezes]
@@ -634,7 +661,8 @@ class MainWindow(QMainWindow):
                                      4000)
 
     def _on_marker_clicked(self, mid: str) -> None:
-        if any(f.id == mid for f in self.doc.project.freezes):
+        if any(f.id == mid for f in self.doc.project.freezes) or \
+                any(c.id == mid for c in self.doc.project.commentary):
             self.player.pause()
             return
         if self.doc.project.board(mid) is not None:
@@ -647,6 +675,10 @@ class MainWindow(QMainWindow):
         fz = next((f for f in self.doc.project.freezes if f.id == mid), None)
         if fz is not None:
             self.edit_freeze(fz)
+            return
+        cm = next((c for c in self.doc.project.commentary if c.id == mid), None)
+        if cm is not None:
+            self.edit_commentary(cm)
             return
         if self.doc.project.board(mid) is not None:
             self.select_board(mid)
@@ -736,6 +768,125 @@ class MainWindow(QMainWindow):
             self.player.skip_freeze()      # Space during a freeze: carry on now
             return
         self.player.toggle()
+
+    # ========================================================= commentary
+    def project_dir(self) -> Optional[str]:
+        return os.path.dirname(os.path.abspath(self.doc.path)) if self.doc.path else None
+
+    def commentary_mixer(self):
+        if not self.doc.project.commentary:
+            return None
+        from ..core.commentary import CommentaryMixer
+        return CommentaryMixer(self.doc.project, self.project_dir(), self.player.fps)
+
+    def _refresh_mixer(self) -> None:
+        if not hasattr(self, "audio"):
+            return
+        self.act_duck.setChecked(self.doc.project.duck_game_audio)
+        mixer = self.commentary_mixer()
+        self.audio.mixer = mixer
+        if self.audio.engine is not None:
+            self.audio.engine.mixer = mixer
+            if self.audio.engine.running:
+                self.audio._restart()
+
+    def toggle_record(self) -> None:
+        if getattr(self, "_rec", None) is not None:
+            self.stop_recording()
+        else:
+            self.start_recording()
+        self.transport.btn_rec.setChecked(getattr(self, "_rec", None) is not None)
+
+    def start_recording(self) -> None:
+        from .recorder import Recorder
+        if not self._need_video():
+            return
+        rec = getattr(self, "recorder", None) or Recorder()
+        self.recorder = rec
+        if not rec.available:
+            QMessageBox.warning(self, "Commentary", "No microphone was found on this PC.")
+            return
+        if not self.doc.path:
+            QMessageBox.information(self, "Commentary",
+                                    "Save the project first — voice recordings are stored next to it.")
+            if not self.save_as():
+                return
+        self.player.set_speed(1.0)
+        self._rec = {"frame": self.player.current}
+        rec.start()
+        self.audio.suppress = self.prefs.mute_game_while_recording
+        self.player.play()
+        self._rec_timer = QTimer(self)
+        self._rec_timer.timeout.connect(self._update_rec_badge)
+        self._rec_timer.start(200)
+        self._update_rec_badge()
+        self.statusBar().showMessage("Recording… talk over the video. Press R (or pause) to stop.", 5000)
+
+    def _update_rec_badge(self) -> None:
+        if getattr(self, "_rec", None) is None:
+            return
+        self.canvas.freeze_badge = f"● REC {self.recorder.seconds():.0f}s"
+        self.canvas.update()
+
+    def _stop_record_if_paused(self) -> None:
+        if getattr(self, "_rec", None) is not None and not self.player.playing:
+            self.stop_recording()
+            self.transport.btn_rec.setChecked(False)
+
+    def stop_recording(self) -> None:
+        info, self._rec = getattr(self, "_rec", None), None
+        if info is None:
+            return
+        if getattr(self, "_rec_timer", None) is not None:
+            self._rec_timer.stop()
+        data = self.recorder.stop()
+        self.audio.suppress = False
+        self.player.pause()
+        self.canvas.freeze_badge = None
+        self.canvas.update()
+        from ..core.audio import RATE
+        if len(data) < RATE * 0.3:
+            self.statusBar().showMessage("Recording too short — nothing saved.", 4000)
+            return
+        from ..core.commentary import write_wav
+        from ..core.model import Commentary
+        n = len(self.doc.project.commentary) + 1
+        folder = safe_name(os.path.splitext(os.path.basename(self.doc.path))[0]) + "_commentary"
+        rel = os.path.join(folder, f"voice_{n:03d}_{int(time.time())}.wav")
+        write_wav(os.path.join(self.project_dir(), rel), data)
+        clip = Commentary(info["frame"], rel.replace("\\", "/"), len(data) / RATE, name=f"Voice {n}")
+        self.doc.add_commentary(clip)
+        self.statusBar().showMessage(f"Commentary saved ({clip.seconds:.1f} s).", 4000)
+
+    def edit_commentary(self, clip) -> None:
+        from PySide6.QtWidgets import QSlider
+        d = QDialog(self)
+        d.setWindowTitle("Voice commentary")
+        form = QFormLayout(d)
+        name = QLineEdit(clip.name)
+        gain = QSlider(Qt.Horizontal)
+        gain.setRange(0, 200)
+        gain.setValue(int(round(clip.gain * 100)))
+        gain_lbl = QLabel(f"{gain.value()}%")
+        gain.valueChanged.connect(lambda v: gain_lbl.setText(f"{v}%"))
+        row = QHBoxLayout()
+        row.addWidget(gain, 1)
+        row.addWidget(gain_lbl)
+        form.addRow("Name", name)
+        form.addRow("Volume", row)
+        form.addRow(QLabel(f"Length {clip.seconds:.1f} s, starts at "
+                           f"{format_timecode(clip.frame / self.player.fps, self.player.fps, frame=clip.frame)}"))
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        delete = bb.addButton("Delete", QDialogButtonBox.DestructiveRole)
+        bb.accepted.connect(d.accept)
+        bb.rejected.connect(d.reject)
+        delete.clicked.connect(lambda: d.done(2))
+        form.addRow(bb)
+        r = d.exec()
+        if r == 2:
+            self.doc.remove_commentary(clip.id)
+        elif r:
+            self.doc.update_commentary(clip.id, name=name.text().strip(), gain=gain.value() / 100)
 
     # ============================================================ freezes
     def _sync_freezes(self) -> None:
@@ -958,6 +1109,24 @@ class MainWindow(QMainWindow):
                  "split": "Split view — drag the divider. Left: before, right: after.",
                  "side": "Side by side — left: before, right: after (view only)."}
         self.statusBar().showMessage(names[mode], 4000)
+
+    def export_video_dialog(self, reel_bookmarks=None) -> None:
+        if not self._need_video():
+            return
+        self.player.pause()
+        from .export_dialog import ExportVideoDialog, run_export
+        d = ExportVideoDialog(self, reel_bookmarks)
+        if d.exec():
+            jobs = d.jobs()
+            self._remember_dir(jobs[0][0].path)
+            run_export(self, jobs)
+
+    def export_reel(self, ids: list) -> None:
+        bms = [b for b in self.doc.project.bookmarks if b.id in set(ids)]
+        if not bms:
+            QMessageBox.information(self, "Export video", "There are no incidents to export.")
+            return
+        self.export_video_dialog(bms)
 
     def export_compare_dialog(self) -> None:
         src = self._source_for_export()
@@ -1502,7 +1671,31 @@ class MainWindow(QMainWindow):
             path += storage.EXTENSION
         return self._save_to(path)
 
+    def _carry_commentary(self, new_path: str) -> None:
+        """Save As to another folder: copy voice recordings next to the new project."""
+        import shutil
+        from ..core.commentary import resolve
+        old_dir = self.project_dir()
+        new_dir = os.path.dirname(os.path.abspath(new_path))
+        if not self.doc.project.commentary or (old_dir and os.path.normcase(old_dir) == os.path.normcase(new_dir)):
+            return
+        folder = safe_name(os.path.splitext(os.path.basename(new_path))[0]) + "_commentary"
+        for c in self.doc.project.commentary:
+            src = resolve(c, old_dir)
+            if not os.path.isfile(src):
+                continue
+            rel = os.path.join(folder, os.path.basename(src))
+            dst = os.path.join(new_dir, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            if os.path.normcase(os.path.abspath(src)) != os.path.normcase(os.path.abspath(dst)):
+                shutil.copy2(src, dst)
+            c.file = rel.replace("\\", "/")
+
     def _save_to(self, path: str) -> bool:
+        try:
+            self._carry_commentary(path)
+        except OSError as exc:
+            QMessageBox.warning(self, "Save", f"Could not copy the voice recordings: {exc}")
         p = self.doc.project
         p.last_frame = self.player.current
         p.loop_a, p.loop_b = self.player.loop_a, self.player.loop_b
@@ -1513,6 +1706,7 @@ class MainWindow(QMainWindow):
             return False
         self.doc.path = path
         self.doc.mark_clean()
+        self._refresh_mixer()
         self.recovery.discard(p)
         self.prefs.add_recent(path)
         self._remember_dir(path)

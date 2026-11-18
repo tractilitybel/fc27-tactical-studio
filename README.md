@@ -32,6 +32,13 @@ playback, incident bookmarks, tactical drawings and a live telestrator for prese
 - Before/after comparison (Y): draggable split view or side-by-side; export before/after images
 - Any drawing can be set to show only in "before", only in "after", or both
 
+**Sequences, video and commentary** (new in 1.4)
+- Freeze frames (F): playback pauses on a moment for a set time with a countdown, then continues
+- Animated drawings: draw-on arrows/runs, and keyframes so spotlights, cut-outs or zones glide between positions
+- Export MP4 (Ctrl+Alt+E): a section, the A–B loop, or a highlights reel of bookmarks with title cards —
+  drawings, animations, freezes, game sound and commentary included
+- Voice commentary (R): record over the match; game sound dips while you talk
+
 **Board workspace** (new in 1.1)
 - Top-down pitch with numbered player tokens, ball, arrows, zones and text
 - Formation presets (4-3-3, 4-2-3-1, 4-4-2, 4-1-2-1-2, 3-5-2, 3-4-3, 5-3-2, 4-5-1), team colours
@@ -66,7 +73,7 @@ python -m venv .venv
 pip install -r requirements-dev.txt
 python scripts/fetch_models.py   # AI player-selection model (~45 MB)
 python run.py                    # optionally: python run.py path\to\match.mp4
-python -m pytest -q tests        # 94 tests
+python -m pytest -q tests        # 110 tests
 ```
 
 ## Documentation

@@ -95,6 +95,8 @@ class AudioOutput(QObject):
         self.track = 0
         self.volume = 1.0
         self.muted = False
+        self.mixer = None            # commentary mixer (set by the main window)
+        self.suppress = False        # e.g. while recording commentary without headphones
         self._latency_samples = 0
         self._started_at = 0.0
         self.timer = QTimer(self)
@@ -111,6 +113,7 @@ class AudioOutput(QObject):
         self.track = 0
         if self.tracks:
             self.engine = AudioEngine(path, 0)
+            self.engine.mixer = self.mixer
         self.stateChanged.emit()
 
     def close(self) -> None:
@@ -127,6 +130,7 @@ class AudioOutput(QObject):
             return
         self.engine.stop()
         self.engine = AudioEngine(self.engine.path, index)
+        self.engine.mixer = self.mixer
         self.track = index
         self._sync()
 
@@ -162,7 +166,7 @@ class AudioOutput(QObject):
     def should_play(self) -> bool:
         p = self.player
         return (self.engine is not None and self.device_available and p.playing and p.direction > 0
-                and not getattr(p, "holding", False)
+                and not getattr(p, "holding", False) and not self.suppress
                 and MIN_SPEED <= p.speed <= MAX_SPEED and not self.muted and self.volume > 0)
 
     def _ensure_stream(self) -> bool:

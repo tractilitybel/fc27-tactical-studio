@@ -346,7 +346,7 @@ def test_board_marker_on_timeline(qapp, win):
 
 def test_loop_box_shows_range(qapp, win):
     tr = win.transport
-    assert tr.loop_range.text() == "not set" and tr.btn_loop.text() == "Off"
+    assert not tr.loop_range.isVisibleTo(tr) and tr.btn_loop.text() == "Off"
     win.player.seek(30)
     win.set_loop_a()
     win.player.seek(90)
