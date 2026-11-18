@@ -19,6 +19,7 @@ fc27studio/
     undo.py             command-based undo stack with merging and macros
     document.py         Project + undo stack + every editing operation
     storage.py          .fc27studio I/O, .bak backups, autosave/recovery, video relinking
+    imaging.py          PNG codec, polygon masks, player cut-outs and background fill (numpy)
   ui/
     main_window.py      window, workspaces, menus/actions, file handling, exports, autosave
     canvas.py           video display + drawing/editing interaction
@@ -28,7 +29,8 @@ fc27studio/
     bookmarks.py        incident list, bookmark/category dialogs
     panels.py           tool palette, drawing properties, layers, telestrator bar
     dialogs.py          preferences, shortcut editor, F1 card, go-to
-    export.py           image/CSV exports
+    export.py           image/CSV exports, before/after composites
+    board.py            tactics board: pitch drawing, formations, board panel
     settings.py         preferences + shortcut registry (INI in %APPDATA%)
   app.py                entry point: theme, crash logging, --selfcheck
 ```
@@ -82,6 +84,30 @@ UI thread ── hover/bookmark thumbs ─▶ ThumbnailWorker thread (own VideoS
   merge key so dragging a slider produces a single undo step.
 - The telestrator's temporary drawings live in the canvas only and never touch the project or undo stack.
 
+## Player cut-outs (`core/imaging.py`)
+
+1. The traced outline is rasterised into an anti-aliased mask (2× supersampled even-odd fill).
+2. The player's pixels and mask are stored as an RGBA PNG inside the annotation (base64), with the crop
+   rectangle and the original outline (`source_points`). The cut-out is self-contained: it does not
+   depend on decoding the video again.
+3. The fill patch: the hole is dilated a few pixels (to remove the edge halo), then same-shaped regions at
+   several offsets around it are compared on a ring of surrounding pixels, and the best match is copied,
+   which continues grass stripes and pitch lines. A harmonic (Laplace) correction field, solved by Jacobi
+   relaxation from the colour differences along the border, removes visible seams; this is
+   Poisson-style seamless cloning.
+4. Moving, scaling and rotating edit only the outline points. The renderer maps the original crop
+   rectangle through the same transform (`Annotation.source_transform`), so the cut-out and its handles
+   always agree.
+
+## Before/after and boards
+
+- Every annotation has a `layer` (`both` / `before` / `after`). The canvas renders the *before* scene
+  and the *after* scene with the same code, clipped at the split divider or side by side.
+- A tactics board is a `Board` in the project with its own annotation list. `ScopedDocument` edits that
+  list with the same operations as the video drawings, sharing the project's undo stack, listeners and
+  dirty state, so the Board workspace reuses the canvas, tools, properties panel and undo unchanged.
+  Board coordinates are pitch pixels at 10 px per metre, which is what the measure tool uses.
+
 ## Rendering
 
 `ui/render.py` paints annotations with QPainter in video coordinates. The canvas applies the view transform
@@ -110,7 +136,7 @@ images match the screen exactly. Spotlights are painted first so they darken the
 
 ## Testing
 
-`python -m pytest -q tests` (49 tests):
+`python -m pytest -q tests` (65 tests):
 
 - `test_video.py` — frame accuracy (B-frames, MPEG-4, random/backward/keyframe boundaries, frame-skipping playback), index cache, timecodes
 - `test_document.py` — undo/redo, merging, layering, grouping, bookmarks, geometry/hit tests, project I/O,
@@ -118,5 +144,10 @@ images match the screen exactly. Spotlights are painted first so they darken the
 - `test_gui.py` — the real main window offscreen: seeking shows the exact frame, keyboard stepping, J/K/L,
   all 10 drawing tools, move/resize/rotate with undo, copy/paste of groups, bookmark navigation and search,
   A/B loop, telestrator, save → move folder → reopen, full-resolution export, autosave/recovery
+
+- `test_milestone2.py` — PNG codec, polygon masks, cut-out fill quality (player removed, pitch line
+  continued), cut-out geometry, boards/scoped undo, formations, and GUI flows: lasso and click cut-outs,
+  move/ghost/reset, before/after layers and compare export, board formations/colours/measure/tokens,
+  duplicate/rename/delete, isolation from video drawings
 
 `FC27TacticalStudio.exe --selfcheck` runs a smoke test inside the packaged build (used by CI).

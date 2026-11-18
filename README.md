@@ -22,6 +22,17 @@ playback, incident bookmarks, tactical drawings and a live telestrator for prese
 - Layer order, grouping, hide/show, copy/paste/duplicate, multi-select, rubber-band selection
 - Full undo/redo for every edit
 
+**Player cut-outs and before/after** (new in 1.1)
+- Cut a player out of the frame (X) and drag, scale or rotate them to where they should have been
+- The gap is filled with surrounding pitch texture; a faded "ghost", outline and arrow show the original spot
+- Before/after comparison (Y): draggable split view or side-by-side; export before/after images
+- Any drawing can be set to show only in "before", only in "after", or both
+
+**Board workspace** (new in 1.1)
+- Top-down pitch with numbered player tokens, ball, arrows, zones and text
+- Formation presets (4-3-3, 4-2-3-1, 4-4-2, 4-1-2-1-2, 3-5-2, 3-4-3, 5-3-2, 4-5-1), team colours
+- Measure distances in metres; multiple boards per project, each linkable to a video moment
+
 **Present workspace**
 - Telestrator: draw live over the video; temporary drawings clear on play (or keep them in the project)
 - Presentation mode (F5): full-screen video with transport only; incident playlist
@@ -50,7 +61,7 @@ python -m venv .venv
 .venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
 pip install -r requirements-dev.txt
 python run.py                    # optionally: python run.py path\to\match.mp4
-python -m pytest -q tests        # 49 tests
+python -m pytest -q tests        # 65 tests
 ```
 
 ## Documentation
