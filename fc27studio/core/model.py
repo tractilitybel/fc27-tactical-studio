@@ -80,6 +80,9 @@ class Annotation:
     # Animation
     reveal_frames: int = 0               # >0: the drawing "draws itself" over this many frames
     keyframes: list = field(default_factory=list)  # [{"frame", "points", "rotation"}], sorted by frame
+    # Player tracking
+    track_style: str = ""                # "ring" | "spotlight" | "label" | "ring_label" ("" = not tracked)
+    track_boxes: dict = field(default_factory=dict)   # {frame: [x, y, w, h]} raw tracked player boxes
 
     # ---------------------------------------------------------------- geometry
     def bbox(self) -> tuple[float, float, float, float]:
@@ -182,6 +185,11 @@ class Annotation:
                                "rotation": k.get("rotation", 0.0)} for k in self.keyframes]
         if not self.reveal_frames:
             d.pop("reveal_frames", None)
+        if not self.track_style:
+            d.pop("track_style", None)
+            d.pop("track_boxes", None)
+        else:
+            d["track_boxes"] = {str(k): list(v) for k, v in self.track_boxes.items()}
         return d
 
     @classmethod
@@ -191,6 +199,7 @@ class Annotation:
         d["source_points"] = [tuple(p) for p in d.get("source_points", [])]
         d["keyframes"] = [{"frame": int(k["frame"]), "points": [tuple(p) for p in k["points"]],
                            "rotation": float(k.get("rotation", 0.0))} for k in d.get("keyframes", [])]
+        d["track_boxes"] = {int(k): list(v) for k, v in (d.get("track_boxes") or {}).items()}
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in known})
 

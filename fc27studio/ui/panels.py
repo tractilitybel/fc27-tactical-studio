@@ -28,8 +28,11 @@ def color_icon(hex_color: str, size: int = 14) -> QIcon:
 TOOL_GLYPHS = {
     "select": "⬚", Kind.ARROW: "➜", Kind.CURVED_ARROW: "↷", Kind.RUN: "⇢", Kind.LINE: "╱",
     Kind.FREEHAND: "✎", Kind.CIRCLE: "◯", Kind.RECT: "▭", Kind.ZONE: "⬠", Kind.TEXT: "T",
-    Kind.SPOTLIGHT: "◉", Kind.CUTOUT: "✂", Kind.TOKEN: "❶", Kind.BALL: "⚽", Kind.MEASURE: "↔",
+    "track": "⌖", Kind.SPOTLIGHT: "◉", Kind.CUTOUT: "✂", Kind.TOKEN: "❶", Kind.BALL: "⚽", Kind.MEASURE: "↔",
 }
+
+
+TOOL_NAMES = {"select": "Select", "track": "Track a player"}
 
 
 class ToolPalette(QToolBar):
@@ -42,8 +45,8 @@ class ToolPalette(QToolBar):
         self.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self.group = QActionGroup(self)
         self.actions_by_tool: dict[str, QAction] = {}
-        for tool in ["select"] + Kind.EVERY:
-            label = "Select" if tool == "select" else Kind.LABELS[tool]
+        for tool in ["select", "track"] + Kind.EVERY:
+            label = TOOL_NAMES.get(tool) or Kind.LABELS[tool]
             act = QAction(TOOL_GLYPHS[tool], self)
             act.setCheckable(True)
             act.setData(tool)
@@ -70,7 +73,7 @@ class ToolPalette(QToolBar):
 
     def set_tooltips(self, keys: dict[str, str]) -> None:
         for tool, act in self.actions_by_tool.items():
-            label = "Select" if tool == "select" else Kind.LABELS[tool]
+            label = TOOL_NAMES.get(tool) or Kind.LABELS[tool]
             k = keys.get(f"tool.{tool}", "")
             act.setToolTip(f"{label} ({k})" if k else label)
 
@@ -278,6 +281,36 @@ class PropertiesPanel(QWidget):
         lay.addWidget(self.anim_box)
         self.anim_box.setVisible(not board)
 
+        # Player tracking
+        from PySide6.QtWidgets import QComboBox, QLineEdit
+        from .tracking_ui import STYLES
+        self.track_box = QGroupBox("Player tracking")
+        tg = QFormLayout(self.track_box)
+        self.track_style = QComboBox()
+        for k, v in STYLES.items():
+            self.track_style.addItem(v, k)
+        self.track_label = QLineEdit("Player")
+        self.track_label.setPlaceholderText("name shown in the label")
+        self.track_secs = QDoubleSpinBox()
+        self.track_secs.setRange(1, 120)
+        self.track_secs.setValue(8)
+        self.track_secs.setSuffix(" s")
+        tg.addRow("Highlight", self.track_style)
+        tg.addRow("Label", self.track_label)
+        tg.addRow("Track for", self.track_secs)
+        hint = QLabel("Press T and click a player (or drag a box around them).")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        tg.addRow(hint)
+        self.track_continue = QPushButton("Track from here")
+        self.track_continue.setToolTip("If the highlight drifted: go to that frame, drag it back onto the player, "
+                                       "then press this to track on from there.")
+        tg.addRow(self.track_continue)
+        self.track_continue_requested = None    # callable set by the main window
+        self.track_continue.clicked.connect(lambda: self.track_continue_requested and self.track_continue_requested())
+        lay.addWidget(self.track_box)
+        self.track_box.setVisible(not board)
+
         arrange = QGroupBox("Arrange")
         ag = QGridLayout(arrange)
         self.btns = {}
@@ -441,6 +474,8 @@ class PropertiesPanel(QWidget):
             self.end_s.setValue(max(a.end_frame for a in sel if not self.canvas.is_temp(a.id)))
         cuts = [a for a in sel if a.kind == Kind.CUTOUT]
         self.cut_box.setVisible(bool(cuts))
+        if not self.board:
+            self.track_continue.setEnabled(any(a.track_style for a in sel))
         if not self.board:
             src_reveal = (src.reveal_frames if src else 0) / max(self.fps, 1.0)
             self.reveal_s.setValue(round(src_reveal, 1))

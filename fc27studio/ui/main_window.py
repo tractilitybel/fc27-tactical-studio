@@ -6,7 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
-from PySide6.QtCore import QByteArray, QSettings, QSize, Qt, QThread, QTimer
+from PySide6.QtCore import QByteArray, QObject, QSettings, QSize, Qt, QThread, QTimer, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QGuiApplication, QImage
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QFileDialog, QFormLayout,
                                QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
@@ -35,7 +35,7 @@ VIDEO_FILTER = ("Video files (*.mp4 *.mkv *.mov *.avi *.webm *.m4v *.ts *.flv *.
                 "All files (*)")
 PROJECT_FILTER = f"FC27 Studio project (*{storage.EXTENSION})"
 WORKSPACES = ["review", "tactics", "board", "present"]
-VIDEO_TOOLS = ["select"] + Kind.VIDEO_TOOLS
+VIDEO_TOOLS = ["select", "track"] + Kind.VIDEO_TOOLS
 BOARD_TOOLS = ["select"] + Kind.BOARD_TOOLS
 PRESENT_TOOLS = ["select"] + Kind.ALL
 
@@ -332,7 +332,7 @@ class MainWindow(QMainWindow):
         A("bm.add_detailed", self.detailed_bookmark)
         A("bm.next", lambda: self.jump_bookmark(1))
         A("bm.prev", lambda: self.jump_bookmark(-1))
-        for tool in ["select"] + Kind.EVERY:
+        for tool in ["select", "track"] + Kind.EVERY:
             A(f"tool.{tool}", lambda _c=False, t=tool: self.choose_tool(t))
         A("tool.clear_telestrator", self.canvas.clear_telestrator)
         A("view.review", lambda: self.set_workspace("review"))
@@ -460,7 +460,7 @@ class MainWindow(QMainWindow):
         b.addAction("Edit categories…", self.edit_categories)
 
         t = mb.addMenu("&Tools")
-        for tool in ["select"] + Kind.ALL + [Kind.CUTOUT]:
+        for tool in ["select"] + Kind.ALL + [Kind.CUTOUT, "track"]:
             t.addAction(a[f"tool.{tool}"])
         tb = t.addMenu("Tactics board")
         for tool in (Kind.TOKEN, Kind.BALL, Kind.MEASURE):
@@ -501,6 +501,8 @@ class MainWindow(QMainWindow):
         tr.frameEntered.connect(lambda f: pl.seek(f))
         tr.speedChosen.connect(pl.set_speed)
         pl.freezeChanged.connect(self._on_freeze_changed)
+        self.canvas.trackRequested.connect(self.track_player)
+        self.properties.track_continue_requested = self.track_continue
         self.properties.seek_request = lambda f: (pl.pause(), pl.seek(f))
         tr.btn_rec.clicked.connect(self.toggle_record)
         pl.stateChanged.connect(self._stop_record_if_paused)
@@ -768,6 +770,107 @@ class MainWindow(QMainWindow):
             self.player.skip_freeze()      # Space during a freeze: carry on now
             return
         self.player.toggle()
+
+    # =========================================================== tracking
+    def _run_tracking(self, start: int, box, end: int):
+        """Track in a background thread with a progress dialog. Returns TrackResult or None."""
+        from .tracking_ui import TrackWorker
+        from ..core import tracking
+        if not tracking.available():
+            QMessageBox.warning(self, "Tracking", "Player tracking is not available in this build.")
+            return None
+        pl = self.player
+        worker = TrackWorker(pl.source.path, pl.index_data, start, box, end)
+        thread = QThread()
+        worker.moveToThread(thread)
+        dlg = QProgressDialog("Tracking the player…", "Stop", 0, 1000, self)
+        dlg.setWindowTitle("Track player")
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(300)
+        result = {}
+
+        class Bridge(QObject):
+            @Slot(float)
+            def progress(self, f):
+                dlg.setValue(int(f * 1000))
+
+            @Slot(object, str)
+            def done(self, res, err):
+                result["res"], result["err"] = res, err
+                thread.quit()
+        bridge = Bridge()
+        worker.progressed.connect(bridge.progress, Qt.QueuedConnection)
+        worker.finished.connect(bridge.done, Qt.QueuedConnection)
+        dlg.canceled.connect(lambda: setattr(worker, "cancel", True))
+        thread.started.connect(worker.run)
+        thread.start()
+        while "err" not in result or thread.isRunning():
+            QApplication.processEvents()
+            thread.wait(15)
+        thread.wait()
+        dlg.close()
+        worker.deleteLater()
+        err = result.get("err", "")
+        if err and err != "cancelled":
+            QMessageBox.critical(self, "Tracking failed", err)
+            return None
+        return result.get("res")
+
+    def _tracking_summary(self, res) -> None:
+        fps = self.player.fps
+        secs = (res.boxes[-1][0] - res.start) / fps if res.boxes else 0
+        if res.lost_at is not None:
+            tc = format_timecode(res.lost_at / fps, fps, frame=res.lost_at)
+            self.statusBar().showMessage(
+                f"Tracked {secs:.1f} s — lost the player at {tc}. Drag the highlight back onto him there and "
+                "press “Track from here”.", 10000)
+        else:
+            self.statusBar().showMessage(f"Tracked the player for {secs:.1f} s. If it drifts anywhere, drag it "
+                                         "back at that frame and press “Track from here”.", 8000)
+
+    def track_player(self, box) -> None:
+        """Track tool: follow the player in *box* from the current frame."""
+        if not self._need_video():
+            return
+        from .tracking_ui import apply_track, make_tracked
+        self.player.pause()
+        start = self.player.current
+        end = min(self.player.frame_count - 1, start + int(self.properties.track_secs.value() * self.player.fps))
+        res = self._run_tracking(start, box, end)
+        if res is None or len(res.boxes) < 2:
+            if res is not None:
+                self.statusBar().showMessage("Couldn't follow that player — try dragging a box around him.", 6000)
+            return
+        style = self.properties.track_style.currentData()
+        anns = make_tracked(style, box, start, self.canvas.style.color, self.properties.track_label.text().strip(),
+                            self.canvas.style.width)
+        for a in anns:
+            apply_track(a, res)
+        self.doc.add_annotations(anns, "Track player")
+        self.canvas.set_tool("select")
+        self.canvas.set_selection({a.id for a in anns})
+        self._tracking_summary(res)
+
+    def track_continue(self) -> None:
+        """Re-track a tracked drawing from the current frame (after the user corrected it)."""
+        from .tracking_ui import apply_track, box_from_annotation
+        sel = [a for a in self.canvas.selected() if a.track_style]
+        if not sel:
+            return
+        self.player.pause()
+        f = self.player.current
+        main = next((a for a in sel if a.track_style != "label"), sel[0])
+        box = box_from_annotation(main)
+        if box is None:
+            return
+        end = min(self.player.frame_count - 1, f + int(self.properties.track_secs.value() * self.player.fps))
+        res = self._run_tracking(f, box, end)
+        if res is None or len(res.boxes) < 2:
+            return
+        ids = [a.id for a in sel]
+        self.doc.modify_annotations(ids, lambda a: apply_track(a, res), "Track from here")
+        self.canvas.sync_animation()
+        self._tracking_summary(res)
 
     # ========================================================= commentary
     def project_dir(self) -> Optional[str]:
@@ -1081,7 +1184,7 @@ class MainWindow(QMainWindow):
 
     def choose_tool(self, tool: str) -> None:
         board_only = tool in (Kind.TOKEN, Kind.BALL, Kind.MEASURE)
-        video_only = tool in (Kind.CUTOUT, Kind.SPOTLIGHT)
+        video_only = tool in (Kind.CUTOUT, Kind.SPOTLIGHT, "track")
         if board_only and self.workspace != "board":
             self.set_workspace("board")
         elif video_only and self.workspace in ("board", "review", "present"):

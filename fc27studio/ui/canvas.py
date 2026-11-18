@@ -50,6 +50,7 @@ class Canvas(QWidget):
     annotationsEdited = Signal()
     statusMessage = Signal(str)
     tokenEditRequested = Signal(str)
+    trackRequested = Signal(tuple)       # player box (x, y, w, h) in video pixels
     compareChanged = Signal(str)
 
     def __init__(self, parent=None):
@@ -577,6 +578,10 @@ class Canvas(QWidget):
             self.center = self._pan_start_center - d
             self.update()
             return
+        if self._drag == "trackbox":
+            self._rubber = QRectF(self._press_v, v)
+            self.update()
+            return
         if self._drag == "divider":
             fr = self._frame_widget_rect()
             self.split = max(0.0, min(1.0, (pos.x() - fr.left()) / max(1.0, fr.width())))
@@ -624,6 +629,18 @@ class Canvas(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, ev: QMouseEvent) -> None:
+        if self._drag == "trackbox":
+            self._drag = None
+            r = (self._rubber or QRectF()).normalized()
+            self._rubber = None
+            self.update()
+            if r.width() * self.scale_factor() > 8 and r.height() * self.scale_factor() > 8:
+                self.trackRequested.emit((r.x(), r.y(), r.width(), r.height()))
+            else:
+                box = self.player_box_at(self._press_v.x(), self._press_v.y())
+                if box is not None:
+                    self.trackRequested.emit(box)
+            return
         if self._drag == "divider":
             self._drag = None
             self.setCursor(Qt.ArrowCursor if self.tool == "select" else Qt.CrossCursor)
@@ -807,6 +824,32 @@ class Canvas(QWidget):
             a.width = max(3.0, st.width * 0.6)
         return a
 
+    def player_box_at(self, x: float, y: float):
+        """Box around the player at (x, y): AI outline if available, else a typical player size."""
+        if self.image is None:
+            return None
+        seg = self.segmenter_provider() if self.segmenter_provider else None
+        if seg is not None:
+            try:
+                import numpy as np
+                self.setCursor(Qt.WaitCursor)
+                frame = self._image_array()
+                sel = seg.start(frame, x, y, frame_key=self.frame)
+                m = seg.full_mask(frame.shape, sel)
+                from ..core.imaging import largest_component
+                m = largest_component(m, (x, y))
+                ys, xs = np.nonzero(m)
+                if len(xs) > 20:
+                    return (float(xs.min()), float(ys.min()), float(xs.max() - xs.min() + 1),
+                            float(ys.max() - ys.min() + 1))
+            except Exception:
+                pass
+            finally:
+                self.setCursor(Qt.CrossCursor)
+        h = self.video_size.height() * 0.09
+        w = h * 0.4
+        return (x - w / 2, y - h * 0.35, w, h)
+
     # ------------------------------------------------------------ AI selection
     def has_ai_selection(self) -> bool:
         return self._ai_sel is not None
@@ -931,6 +974,10 @@ class Canvas(QWidget):
                 a.text = text
                 a.fill_opacity = max(a.fill_opacity, 0.25)
                 self._commit_new(a)
+            return
+        if self.tool == "track":
+            self._drag = "trackbox"
+            self._rubber = QRectF(v, v)
             return
         if self.tool in (Kind.TOKEN, Kind.BALL):
             # Clicking an existing token/ball selects it (so it can be dragged or

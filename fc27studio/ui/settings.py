@@ -159,6 +159,7 @@ SHORTCUTS: dict[str, tuple[str, str, str]] = {
     "tool.text": ("Tools", "Text", "9"),
     "tool.spotlight": ("Tools", "Spotlight", "Shift+9"),
     "tool.cutout": ("Tools", "Player cut-out", "X"),
+    "tool.track": ("Tools", "Track a player", "T"),
     "tool.token": ("Tools", "Player token (board)", "P"),
     "tool.ball": ("Tools", "Ball (board)", "O"),
     "tool.measure": ("Tools", "Measure distance (board)", "Shift+M"),
