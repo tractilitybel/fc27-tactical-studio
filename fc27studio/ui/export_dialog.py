@@ -16,6 +16,22 @@ from .export import safe_name
 from .video_export import Cancelled, ExportOptions, Segment, VideoExporter, bookmark_segments
 
 
+def export_log():
+    """Append-only export log in %APPDATA%/FC27TacticalStudio/logs/export.log."""
+    import time as _t
+    from .settings import app_data_dir
+    path = os.path.join(app_data_dir(), "logs", "export.log")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    def log(msg: str) -> None:
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"{_t.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+        except OSError:
+            pass
+    return log
+
+
 class ExportWorker(QObject):
     progressed = Signal(float)
     finished = Signal(list, str)   # written paths, error message ("" = ok, "cancelled")
@@ -29,6 +45,8 @@ class ExportWorker(QObject):
     @Slot()
     def run(self):
         written = []
+        log = export_log()
+        log(f"start: {len(self.jobs)} job(s) from {self.video_path}")
         try:
             n = len(self.jobs)
             for i, (opts, segs) in enumerate(self.jobs):
@@ -38,11 +56,22 @@ class ExportWorker(QObject):
                     self.progressed.emit((i + f) / n)
                 written.append(VideoExporter(self.project, self.video_path, self.index_data, opts,
                                              self.mixer, prog).run(segs))
-            self.finished.emit(written, "")
+            log(f"done: {written}")
+            self._finish(written, "")
         except Cancelled:
-            self.finished.emit(written, "cancelled")
+            log("cancelled")
+            self._finish(written, "cancelled")
         except Exception as exc:
-            self.finished.emit(written, f"{type(exc).__name__}: {exc}")
+            import traceback
+            log("FAILED\n" + traceback.format_exc())
+            self._finish(written, f"{type(exc).__name__}: {exc}")
+
+    def _finish(self, written, err):
+        # Hand this object back to the main thread before it is released there
+        # (deleting a QObject from a foreign thread can crash on Windows).
+        from PySide6.QtWidgets import QApplication
+        self.moveToThread(QApplication.instance().thread())
+        self.finished.emit(written, err)
 
 
 class ExportVideoDialog(QDialog):
@@ -250,6 +279,27 @@ class ExportVideoDialog(QDialog):
         self.accept()
 
 
+class _MainThreadBridge(QObject):
+    """Receives the worker's signals on the main (GUI) thread.
+
+    Signals connected to plain Python functions run in the *emitting* thread
+    — the export thread — and touching widgets from there crashes on Windows.
+    Connecting to slots of an object that lives on the main thread makes Qt
+    queue the calls to the GUI thread instead."""
+
+    def __init__(self, on_progress, on_done):
+        super().__init__()
+        self._p, self._d = on_progress, on_done
+
+    @Slot(float)
+    def progress(self, f):
+        self._p(f)
+
+    @Slot(list, str)
+    def done(self, paths, err):
+        self._d(paths, err)
+
+
 def run_export(win, jobs) -> Optional[list]:
     """Run export jobs in a background thread with a progress dialog."""
     pl = win.player
@@ -263,16 +313,25 @@ def run_export(win, jobs) -> Optional[list]:
     dlg.setMinimumDuration(0)
     result = {}
 
-    def on_progress(f):
-        dlg.setValue(int(f * 1000))
-
     def on_done(paths, err):
         result["paths"], result["err"] = paths, err
         thread.quit()
-        dlg.reset()
 
-    worker.progressed.connect(on_progress)
-    worker.finished.connect(on_done)
+    import time as _t
+    t0 = _t.perf_counter()
+
+    def on_progress(f):
+        dlg.setValue(int(f * 1000))
+        el = _t.perf_counter() - t0
+        if f > 0.02 and el > 2:
+            left = el * (1 - f) / f
+            mins, secs = divmod(int(left + 0.5), 60)
+            dlg.setLabelText(f"Rendering video… {f * 100:.0f}%  —  about "
+                             f"{f'{mins} min ' if mins else ''}{secs} s left")
+
+    bridge = _MainThreadBridge(on_progress, on_done)
+    worker.progressed.connect(bridge.progress, Qt.QueuedConnection)
+    worker.finished.connect(bridge.done, Qt.QueuedConnection)
     dlg.canceled.connect(lambda: setattr(worker, "cancel", True))
     thread.started.connect(worker.run)
     thread.start()
@@ -282,7 +341,9 @@ def run_export(win, jobs) -> Optional[list]:
         thread.wait(20)
         if "err" in result and not thread.isRunning():
             break
+    thread.wait()
     dlg.close()
+    worker.deleteLater()
     err = result.get("err", "")
     paths = result.get("paths", [])
     if err == "cancelled":

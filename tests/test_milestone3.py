@@ -349,3 +349,29 @@ def test_record_commentary_in_app(qapp, win, tmp_path):
     pump(qapp, 0.5)
     win.player.pause()
     assert getattr(win, "_rec", None) is None and len(win.doc.project.commentary) == 2
+
+
+def test_export_progress_runs_on_gui_thread(qapp, av_video, monkeypatch, tmp_path):
+    """Regression: progress/finish handlers must run on the GUI thread
+    (touching widgets from the export thread crashed the app on Windows)."""
+    import threading
+    from PySide6.QtWidgets import QProgressDialog
+    from fc27studio.ui.export_dialog import run_export
+    from fc27studio.ui.main_window import MainWindow
+    from fc27studio.ui.video_export import ExportOptions, Segment
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Discard))
+    threads = []
+    orig = QProgressDialog.setValue
+    monkeypatch.setattr(QProgressDialog, "setValue",
+                        lambda self, v: (threads.append(threading.current_thread()), orig(self, v))[1])
+    w = MainWindow()
+    w.open_video(av_video)
+    w._quiet_exports = True
+    out = str(tmp_path / "gui.mp4")
+    paths = run_export(w, [(ExportOptions(out, sound=True), [Segment(0, 89)])])
+    assert paths == [out] and threads
+    assert all(t is threading.main_thread() for t in threads)
+    import os
+    assert os.path.isfile(out) and not os.path.exists(out + ".part.mp4")
+    w.doc.mark_clean()
+    w.close()

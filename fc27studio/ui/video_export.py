@@ -141,12 +141,15 @@ class VideoExporter:
         fps = float(fps_frac)
         W, H = self._out_size(src.info.width, src.info.height)
         tmp = o.path + ".part.mp4"
-        out = av.open(tmp, "w")
+        if os.path.exists(tmp):
+            os.unlink(tmp)                       # leftover from an interrupted export
+        out = av.open(tmp, "w", options={"movflags": "+faststart"})
         vs = out.add_stream("libx264" if "libx264" in av.codecs_available else "mpeg4", rate=fps_frac)
         vs.width, vs.height, vs.pix_fmt = W, H, "yuv420p"
         vs.time_base = Fraction(1, 1) / fps_frac
         if vs.codec_context.name == "libx264":
-            vs.options = {"crf": str(o.crf), "preset": "medium", "movflags": "+faststart"}
+            # "fast" is ~2x quicker than "medium" for a few % larger files at the same quality
+            vs.options = {"crf": str(o.crf), "preset": "fast"}
         has_audio = o.sound or (o.commentary and self.mixer is not None)
         aus = None
         if has_audio:
