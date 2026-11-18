@@ -788,6 +788,13 @@ class Canvas(QWidget):
                 self._commit_new(a)
             return
         if self.tool in (Kind.TOKEN, Kind.BALL):
+            # Clicking an existing token/ball selects it (so it can be dragged or
+            # deleted) instead of stacking a new one on top.
+            hit = self.annotation_at(ev.position())
+            if hit is not None and hit.kind in (Kind.TOKEN, Kind.BALL):
+                self.set_selection({hit.id})
+                self._begin_edit("move")
+                return
             a = self._new_annotation(self.tool, [p])
             if self.tool == Kind.TOKEN:
                 a.text = self.next_token_number(a.color)

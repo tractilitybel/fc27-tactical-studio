@@ -312,3 +312,34 @@ def test_board_edits_do_not_touch_video_drawings(qapp, win):
     assert win.current_board().annotations == []
     win.actions["edit.undo"].trigger()
     assert len(win.current_board().annotations) > 0
+
+
+def test_352_has_two_dms_and_a_cam():
+    from fc27studio.ui.board import FORMATIONS
+    mids = sorted(FORMATIONS["3-5-2"][5:8])           # the three central midfielders
+    dms = [p for p in mids if p[0] < 35]
+    cam = [p for p in mids if p[0] > 40]
+    assert len(dms) == 2 and len(cam) == 1 and abs(cam[0][1] - 34) < 1
+
+
+def test_delete_key_on_board(qapp, win):
+    from fc27studio.ui.board import to_px
+    win.new_board()
+    board = win.current_board()
+    bc = win.board_canvas
+    win.choose_tool(Kind.BALL)
+    at = bc.to_widget(QPointF(*to_px(60, 20))).toPoint()
+    QTest.mouseClick(bc, Qt.LeftButton, Qt.NoModifier, at)
+    n = len(board.annotations)
+    bc.set_selection(set())
+    # Ball tool still active: clicking the ball selects it instead of adding another.
+    QTest.mouseClick(bc, Qt.LeftButton, Qt.NoModifier, at)
+    assert len(board.annotations) == n and len(bc.selection) == 1
+    QTest.keyClick(bc, Qt.Key_Delete)
+    assert not any(a.kind == Kind.BALL for a in board.annotations)
+    # A token selected with the select tool is deleted by the Delete key too.
+    win.choose_tool("select")
+    tok = next(a for a in board.annotations if a.kind == Kind.TOKEN)
+    QTest.mouseClick(bc, Qt.LeftButton, Qt.NoModifier, bc.to_widget(QPointF(*tok.points[0])).toPoint())
+    QTest.keyClick(bc, Qt.Key_Delete)
+    assert tok not in board.annotations
