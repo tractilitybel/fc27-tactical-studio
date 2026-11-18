@@ -229,6 +229,12 @@ class Timeline(QWidget):
                 continue
             x = self._x_of(m.frame)
             c = QColor(m.color)
+            if m.kind == "calib":
+                p.setPen(QPen(QColor(20, 24, 30), 1))
+                p.setBrush(QColor(60, 220, 120))
+                p.drawPolygon(QPolygonF([QPointF(x, mark_top + 1), QPointF(x + 6, mark_top + 12),
+                                         QPointF(x - 6, mark_top + 12)]))
+                continue
             if m.kind == "voice":
                 xe = self._x_of(min(m.end or m.frame, self.v1))
                 bar = QRectF(x, mark_top + 3, max(4.0, xe - x), 9)

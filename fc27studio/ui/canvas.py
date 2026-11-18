@@ -51,6 +51,7 @@ class Canvas(QWidget):
     statusMessage = Signal(str)
     tokenEditRequested = Signal(str)
     trackRequested = Signal(tuple)       # player box (x, y, w, h) in video pixels
+    calibrationClicked = Signal(float, float)
     compareChanged = Signal(str)
 
     def __init__(self, parent=None):
@@ -97,7 +98,12 @@ class Canvas(QWidget):
         self.px_per_m: Optional[float] = None
         self.token_size = 22.0
         self._lasso_moved = False
-        self.freeze_badge: Optional[str] = None   # e.g. "Freeze 3" shown while playback holds
+        self.freeze_badge: Optional[str] = None
+        # Pitch calibration: provider(frame) -> image->pitch homography or None
+        self.homography_provider: Optional[Callable[[int], object]] = None
+        self.show_pitch_lines = False
+        self.calib_points: list = []            # shown while calibrating
+        self._overlay_cache = (None, None)   # e.g. "Freeze 3" shown while playback holds
         # AI player selection (cut-out tool): provider returns a PlayerSegmenter or None
         self.segmenter_provider: Optional[Callable[[], object]] = None
         self._ai_sel = None
@@ -318,6 +324,8 @@ class Canvas(QWidget):
                     p.drawLine(QPointF(*d.points[-1]), self._hover_v)
         if self._ai_sel is not None:
             self._paint_ai_selection(p)
+        if self.calib_points:
+            self._paint_calib_points(p)
         p.setClipping(False)
         p.resetTransform()
         if self.compare == "split":
@@ -332,6 +340,34 @@ class Canvas(QWidget):
             p.setPen(QPen(QColor(90, 170, 255), 1, Qt.DashLine))
             p.setBrush(QColor(90, 170, 255, 40))
             p.drawRect(r.normalized())
+
+    def _paint_pitch_lines(self, p: QPainter, H) -> None:
+        from ..core.calibration import lines_in_image
+        key = (self.frame, id(H))
+        if self._overlay_cache[0] != key:
+            try:
+                self._overlay_cache = (key, lines_in_image(H))
+            except Exception:
+                self._overlay_cache = (key, [])
+        pen = QPen(QColor(255, 255, 255, 150), 1.5 / max(self.scale_factor(), 0.01), Qt.DashLine)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        from PySide6.QtGui import QPolygonF
+        for poly in self._overlay_cache[1]:
+            p.drawPolyline(QPolygonF([QPointF(x, y) for x, y in poly]))
+
+    def _paint_calib_points(self, p: QPainter) -> None:
+        r = 6 / max(self.scale_factor(), 0.01)
+        f = QFont(self.font())
+        f.setPixelSize(max(8, int(12 / max(self.scale_factor(), 0.01))))
+        p.setFont(f)
+        for pt in self.calib_points:
+            c = QPointF(pt["x"], pt["y"])
+            p.setPen(QPen(QColor(10, 12, 16), r * 0.3))
+            p.setBrush(QColor(255, 210, 0))
+            p.drawEllipse(c, r, r)
+            p.setPen(QColor(255, 255, 255))
+            p.drawText(c + QPointF(r * 1.4, -r * 0.6), pt["name"])
 
     def _paint_ai_selection(self, p: QPainter) -> None:
         """Painted in video coordinates: tinted mask + include/exclude markers."""
@@ -352,9 +388,12 @@ class Canvas(QWidget):
         p.drawImage(frame_rect, self.image)
         p.setClipRect(frame_rect, Qt.IntersectClip)
         if self.show_drawings:
+            H = self.homography_provider(self.frame) if self.homography_provider else None
+            if self.show_pitch_lines and H is not None:
+                self._paint_pitch_lines(p, H)
             for a in sorted(self.visible_annotations(side), key=paint_order):
                 paint_annotation(p, posed(a, self.frame) if not self.board_mode else a,
-                                 frame_rect, self.px_per_m)
+                                 frame_rect, self.px_per_m, H if a.kind == Kind.MEASURE else None)
         p.restore()
 
     def _side_transforms(self) -> tuple[QTransform, QTransform]:
@@ -974,6 +1013,9 @@ class Canvas(QWidget):
                 a.text = text
                 a.fill_opacity = max(a.fill_opacity, 0.25)
                 self._commit_new(a)
+            return
+        if self.tool == "calibrate":
+            self.calibrationClicked.emit(v.x(), v.y())
             return
         if self.tool == "track":
             self._drag = "trackbox"

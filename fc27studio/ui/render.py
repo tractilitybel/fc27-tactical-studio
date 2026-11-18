@@ -88,7 +88,7 @@ def _shorten(a: QPointF, b: QPointF, by: float) -> QPointF:
 
 
 def paint_annotation(p: QPainter, ann: Annotation, frame_rect: QRectF,
-                     px_per_m: Optional[float] = None) -> None:
+                     px_per_m: Optional[float] = None, homography=None) -> None:
     if not ann.points:
         return
     if ann.kind == Kind.CUTOUT:
@@ -98,7 +98,7 @@ def paint_annotation(p: QPainter, ann: Annotation, frame_rect: QRectF,
         _paint_token(p, ann)
         return
     if ann.kind == Kind.MEASURE:
-        _paint_measure(p, ann, px_per_m)
+        _paint_measure(p, ann, px_per_m, homography)
         return
     color = qcolor(ann.color, 1.0)
     p.save()
@@ -231,9 +231,9 @@ def default_control(a: QPointF, b: QPointF) -> QPointF:
 
 
 def paint_annotations(p: QPainter, anns: Iterable[Annotation], frame_rect: QRectF,
-                      px_per_m: Optional[float] = None) -> None:
+                      px_per_m: Optional[float] = None, homography=None) -> None:
     for a in sorted(anns, key=paint_order):
-        paint_annotation(p, a, frame_rect, px_per_m)
+        paint_annotation(p, a, frame_rect, px_per_m, homography)
 
 
 # ------------------------------------------------------------------ cut-outs
@@ -355,13 +355,16 @@ def _paint_token(p: QPainter, ann: Annotation) -> None:
     p.restore()
 
 
-def measure_text(ann: Annotation, px_per_m: Optional[float]) -> str:
+def measure_text(ann: Annotation, px_per_m: Optional[float], homography=None) -> str:
     (x0, y0), (x1, y1) = ann.points[0], ann.points[-1]
+    if homography is not None:
+        from ..core.calibration import distance_m
+        return f"{distance_m(homography, (x0, y0), (x1, y1)):.1f} m"
     d = math.hypot(x1 - x0, y1 - y0)
-    return f"{d / px_per_m:.1f} m" if px_per_m else f"{d:.0f} px"
+    return f"{d / px_per_m:.1f} m" if px_per_m else "? m (calibrate pitch)"
 
 
-def _paint_measure(p: QPainter, ann: Annotation, px_per_m: Optional[float]) -> None:
+def _paint_measure(p: QPainter, ann: Annotation, px_per_m: Optional[float], homography=None) -> None:
     if len(ann.points) < 2:
         return
     a, b = QPointF(*ann.points[0]), QPointF(*ann.points[-1])
@@ -376,7 +379,7 @@ def _paint_measure(p: QPainter, ann: Annotation, px_per_m: Optional[float]) -> N
     nx, ny = -dy / L * w * 3, dx / L * w * 3
     for q in (a, b):
         p.drawLine(QPointF(q.x() - nx, q.y() - ny), QPointF(q.x() + nx, q.y() + ny))
-    label = measure_text(ann, px_per_m)
+    label = measure_text(ann, px_per_m, homography)
     f = text_font(max(10.0, ann.font_size * 0.6))
     p.setFont(f)
     fm = QFontMetricsF(f)
@@ -396,12 +399,13 @@ def paint_order(a: Annotation):
     return (a.kind != Kind.SPOTLIGHT, a.z)
 
 
-def render_frame(frame: QImage, anns: Iterable[Annotation], px_per_m: Optional[float] = None) -> QImage:
+def render_frame(frame: QImage, anns: Iterable[Annotation], px_per_m: Optional[float] = None,
+                 homography=None) -> QImage:
     """Full-resolution composite of a frame and its annotations."""
     out = frame.convertToFormat(QImage.Format_ARGB32_Premultiplied)
     p = QPainter(out)
     p.setRenderHint(QPainter.Antialiasing)
     p.setRenderHint(QPainter.TextAntialiasing)
-    paint_annotations(p, anns, QRectF(0, 0, out.width(), out.height()), px_per_m)
+    paint_annotations(p, anns, QRectF(0, 0, out.width(), out.height()), px_per_m, homography)
     p.end()
     return out.convertToFormat(QImage.Format_RGB32)

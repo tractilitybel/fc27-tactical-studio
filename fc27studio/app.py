@@ -173,7 +173,23 @@ def selfcheck() -> int:
             sound = "ok (no device)"
     except Exception as exc:
         raise AssertionError(f"sound library missing: {exc}")
-    print(f"{APP_NAME} {__version__} selfcheck OK (codec {codec}, PyAV {av.__version__}, AI {ai}, sound {sound}, export ok)")
+    # Tracking + calibration (OpenCV)
+    from .core import tracking
+    from .core.calibration import LANDMARKS, solve
+    assert tracking.available(), "OpenCV missing"
+    yy, xx = np.mgrid[0:180, 0:320]
+    base = (((xx // 8 + yy // 8) % 2) * 60 + 60).astype(np.uint8)
+    f0 = np.dstack([base, base + 40, base])
+    f1 = np.roll(f0, 3, axis=1)
+    cm = tracking.CameraMotion()
+    cm.start(f0)
+    Hc = cm.step(f1)
+    assert Hc is not None and abs(Hc[0, 2] - 3) < 0.5, "camera motion failed"
+    pts = [{"name": n, "x": LANDMARKS[n][0] * 10, "y": LANDMARKS[n][1] * 10}
+           for n in ("Centre spot", "Halfway line – top", "Left penalty spot", "Left box – top front corner")]
+    assert solve(pts)[0] is not None, "calibration failed"
+    print(f"{APP_NAME} {__version__} selfcheck OK (codec {codec}, PyAV {av.__version__}, AI {ai}, sound {sound}, "
+          f"export ok, tracking ok)")
     return 0
 
 

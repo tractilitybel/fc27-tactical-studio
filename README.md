@@ -39,6 +39,14 @@ playback, incident bookmarks, tactical drawings and a live telestrator for prese
   drawings, animations, freezes, game sound and commentary included
 - Voice commentary (R): record over the match; game sound dips while you talk
 
+**Tracking and calibration** (new in 1.5)
+- Track a player (T): click him (or drag a box) and a ring, spotlight or name label follows him; it copes
+  with team-mates crossing in front; correct any drift and press *Track from here*
+- Calibrate the pitch (Ctrl+K) by clicking 4+ known points; pitch-line overlay to check it; the calibration
+  follows the camera as it pans and zooms
+- Real distances on the video (Shift+M), distance covered and top speed of tracked players, and their run
+  drawn onto a tactics board
+
 **Board workspace** (new in 1.1)
 - Top-down pitch with numbered player tokens, ball, arrows, zones and text
 - Formation presets (4-3-3, 4-2-3-1, 4-4-2, 4-1-2-1-2, 3-5-2, 3-4-3, 5-3-2, 4-5-1), team colours
@@ -73,7 +81,7 @@ python -m venv .venv
 pip install -r requirements-dev.txt
 python scripts/fetch_models.py   # AI player-selection model (~45 MB)
 python run.py                    # optionally: python run.py path\to\match.mp4
-python -m pytest -q tests        # 110 tests
+python -m pytest -q tests        # 123 tests
 ```
 
 ## Documentation

@@ -301,6 +301,26 @@ class Document:
     def update_commentary(self, cid: str, **changes) -> None:
         self._list_update(self.project.commentary, cid, "Edit commentary", "commentary", **changes)
 
+    def set_calibration(self, calib) -> None:
+        """Add a calibration, replacing one on the same frame (one undo step)."""
+        lst = self.project.calibrations
+        old = [c for c in lst if c.frame == calib.frame]
+
+        def redo():
+            for c in old:
+                if c in lst:
+                    lst.remove(c)
+            lst.append(calib)
+
+        def undo():
+            if calib in lst:
+                lst.remove(calib)
+            lst.extend(old)
+        self._cmd("Calibrate pitch", redo, undo, "calibrations")
+
+    def remove_calibration(self, cid: str) -> None:
+        self._list_remove(self.project.calibrations, cid, "Delete calibration", "calibrations")
+
     # ---------------------------------------------------------------- boards
     def add_board(self, board: Board, index: Optional[int] = None) -> None:
         lst = self.project.boards

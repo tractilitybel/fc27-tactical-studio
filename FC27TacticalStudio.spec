@@ -8,7 +8,7 @@ block_cipher = None
 import os
 from PyInstaller.utils.hooks import collect_data_files
 
-hiddenimports = collect_submodules("av") + collect_submodules("onnxruntime") + ["sounddevice", "_sounddevice"]
+hiddenimports = collect_submodules("av") + collect_submodules("onnxruntime") + ["sounddevice", "_sounddevice", "cv2"]
 binaries = collect_dynamic_libs("av") + collect_dynamic_libs("onnxruntime")
 
 datas = [

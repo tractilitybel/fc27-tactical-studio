@@ -20,10 +20,12 @@ Sound like YouTube (1.3); freeze frames that pause playback with a countdown; an
 title cards, drawings, animations, freezes, game sound and commentary; voice commentary recording
 with automatic ducking.
 
-## Milestone 4 — Tracking
-- Pitch calibration (four known pitch points) for real distances and angles on the video
-- Track a selected player across frames so spotlights and labels follow them
-- Optional AI-assisted player detection for one-click selection (runs locally)
+## ✅ Milestone 4 — Tracking and calibration (1.5)
+Player tracking (median-flow with forward–backward checks, appearance check and an occlusion-aware motion
+model) with ring/spotlight/label highlights and "Track from here"; one-click AI player selection
+(shipped in 1.2); pitch calibration from named landmarks with a live pitch-line overlay, carried
+through camera pans/zooms; real distances on the video; distance covered and top speed of tracked
+players; tracked runs drawn onto tactics boards.
 
 ## Milestone 5 — Live capture
 - Record the game window or screen directly in the app (Windows Graphics Capture + hardware encoding)

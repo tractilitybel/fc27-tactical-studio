@@ -32,7 +32,7 @@ class Kind:
     MEASURE = "measure"      # distance line (metres on the board)
 
     ALL = [ARROW, CURVED_ARROW, RUN, LINE, FREEHAND, CIRCLE, RECT, ZONE, TEXT, SPOTLIGHT]
-    VIDEO_TOOLS = ALL + [CUTOUT]
+    VIDEO_TOOLS = ALL + [CUTOUT, MEASURE]
     BOARD_TOOLS = [TOKEN, BALL, ARROW, CURVED_ARROW, RUN, LINE, FREEHAND, CIRCLE, RECT, ZONE,
                    TEXT, MEASURE]
     EVERY = ALL + [CUTOUT, TOKEN, BALL, MEASURE]
@@ -375,6 +375,7 @@ class Project:
     freezes: list[Freeze] = field(default_factory=list)
     commentary: list[Commentary] = field(default_factory=list)
     duck_game_audio: bool = True        # lower game sound while commentary plays
+    calibrations: list = field(default_factory=list)   # [calibration.Calibration]
     id: str = field(default_factory=new_id)
 
     # ---------------------------------------------------------- lookups
@@ -444,6 +445,7 @@ class Project:
             "freezes": [f.to_dict() for f in self.freezes],
             "commentary": [c.to_dict() for c in self.commentary],
             "duck_game_audio": self.duck_game_audio,
+            "calibrations": [c.to_dict() for c in self.calibrations],
         }
 
     @classmethod
@@ -467,4 +469,6 @@ class Project:
         p.freezes = [Freeze.from_dict(f) for f in d.get("freezes", [])]
         p.commentary = [Commentary.from_dict(c) for c in d.get("commentary", [])]
         p.duck_game_audio = bool(d.get("duck_game_audio", True))
+        from .calibration import Calibration
+        p.calibrations = [Calibration.from_dict(c) for c in d.get("calibrations", [])]
         return p

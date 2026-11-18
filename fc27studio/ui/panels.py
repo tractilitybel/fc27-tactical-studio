@@ -308,6 +308,14 @@ class PropertiesPanel(QWidget):
         tg.addRow(self.track_continue)
         self.track_continue_requested = None    # callable set by the main window
         self.track_continue.clicked.connect(lambda: self.track_continue_requested and self.track_continue_requested())
+        self.track_stats = QLabel("")
+        self.track_stats.setWordWrap(True)
+        tg.addRow(self.track_stats)
+        self.track_board = QPushButton("Draw this run on a tactics board")
+        self.track_board_requested = None
+        self.track_board.clicked.connect(lambda: self.track_board_requested and self.track_board_requested())
+        tg.addRow(self.track_board)
+        self.stats_provider = None             # callable(annotation) -> text, set by the main window
         lay.addWidget(self.track_box)
         self.track_box.setVisible(not board)
 
@@ -475,7 +483,15 @@ class PropertiesPanel(QWidget):
         cuts = [a for a in sel if a.kind == Kind.CUTOUT]
         self.cut_box.setVisible(bool(cuts))
         if not self.board:
-            self.track_continue.setEnabled(any(a.track_style for a in sel))
+            tracked = [a for a in sel if a.track_style and a.track_boxes]
+            self.track_continue.setEnabled(bool(tracked))
+            text, can_board = ("", False)
+            if tracked and self.stats_provider:
+                text, can_board = self.stats_provider(tracked[0])
+            self.track_stats.setText(text)
+            self.track_stats.setVisible(bool(tracked))
+            self.track_board.setVisible(bool(tracked))
+            self.track_board.setEnabled(can_board)
         if not self.board:
             src_reveal = (src.reveal_frames if src else 0) / max(self.fps, 1.0)
             self.reveal_s.setValue(round(src_reveal, 1))

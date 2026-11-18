@@ -202,7 +202,30 @@ under the Incidents list):
   animations, freeze frames, game sound and commentary. The result is a standard MP4 (H.264 + AAC) that
   plays on any PC or phone and uploads to YouTube, Discord or WhatsApp.
 
-## 10. Exporting images
+## 10. Tracking players and calibrating the pitch
+
+**Track a player.** In *Tactics*, press **T** (⌖) and click the player (the AI finds him), or drag a box
+around him. Choose the highlight first in the Drawing panel under *Player tracking*: ring at the feet,
+spotlight, name label, or ring + label (with the name to show), and how many seconds to track. The
+highlight then follows him; it copes with team-mates running past or in front of him. If it ever drifts
+(e.g. two players in the same kit running side by side on a fast camera pan), go to that frame, drag the
+highlight back onto him and press **Track from here**. If he leaves the picture, tracking stops there and
+the status bar says where.
+
+**Calibrate the pitch** (*Tools → Calibrate pitch*, **Ctrl+K**). On a frame where some pitch markings
+are visible: click a point on the mini pitch (e.g. the corner of the box), then click the same spot on
+the video; repeat for 4–6 points spread over the picture (not all on one line). Dashed pitch lines are
+drawn over the video so you can see at once whether it fits; points that disagree turn orange. Press
+**Save calibration**. One calibration covers about 30 seconds either side — the app measures how the
+camera pans and zooms and carries it along. Calibrated frames have a green ▲ on the timeline.
+*View → Show pitch lines* (Ctrl+Shift+P) shows the overlay any time.
+
+Once calibrated:
+- **Measure (Shift+M)** on the video shows real metres.
+- A selected **tracked player** shows *distance covered* and *top / average speed* in the Drawing panel,
+  and **Draw this run on a tactics board** plots his exact path on the Board.
+
+## 11. Exporting images
 
 - *File → Export → Export frame image* (Ctrl+E): PNG or JPG at the video's full resolution, with drawings.
 - *Export clean frame*: the same without drawings.
@@ -210,7 +233,7 @@ under the Incidents list):
 - *Export bookmark images*: one image per bookmark (respects the current search/filter).
 - *Export bookmark list (CSV)*: opens in Excel or Google Sheets.
 
-## 11. Safety: saving, autosave and recovery
+## 12. Safety: saving, autosave and recovery
 
 - Saving is atomic, and the previous version is kept as `yourproject.fc27studio.bak`. If a project file is
   ever damaged, the backup is opened automatically and you are told about it.
@@ -220,7 +243,7 @@ under the Incidents list):
 - If the video was moved or renamed you are asked to locate it (*File → Relink video…* works at any time).
   Bookmarks and drawings are kept. You are warned if the new file has a different length or resolution.
 
-## 12. Preferences and shortcuts
+## 13. Preferences and shortcuts
 
 *Edit → Preferences* (Ctrl+,): frame cache size, decoder threads, frame dropping, autosave interval,
 default drawing duration, jump size, timecode format, timeline thumbnails, telestrator behaviour,
@@ -229,7 +252,7 @@ JPG quality.
 *Edit → Keyboard shortcuts…*: reassign any shortcut; conflicts are flagged. Press **F1** for a printable
 reference card of the current shortcuts.
 
-## 13. Performance tips
+## 14. Performance tips
 
 - 1080p60 plays in real time on any recent PC. For 4K60 recordings enable *Drop frames to keep real-time
   speed* (on by default); frame stepping is always exact regardless.
@@ -238,7 +261,7 @@ reference card of the current shortcuts.
 - Recordings with very long keyframe intervals (some capture tools use 10 s or more) make random seeks
   slower. If seeking feels slow, set your capture software to a 1–2 second keyframe interval.
 
-## 14. Troubleshooting
+## 15. Troubleshooting
 
 | Problem | Fix |
 |---|---|

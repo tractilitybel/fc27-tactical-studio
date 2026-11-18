@@ -24,6 +24,8 @@ fc27studio/
     audio.py            audio decode (any start time), WSOLA time-stretch, background audio engine
     animation.py        keyframe interpolation (eased), draw-on reveal, posing drawings per frame
     commentary.py       WAV I/O and the commentary mixer with ducking
+    tracking.py         player tracker (median flow + motion model) and camera motion (OpenCV)
+    calibration.py      pitch landmarks, homography solve (normalised DLT), overlay, distances
   ui/
     main_window.py      window, workspaces, menus/actions, file handling, exports, autosave
     canvas.py           video display + drawing/editing interaction
@@ -33,6 +35,8 @@ fc27studio/
     recorder.py         microphone capture for commentary
     video_export.py     MP4 rendering (sections, reels, title cards, freezes, audio)
     export_dialog.py    export options and background export
+    tracking_ui.py      tracking worker; ring/spotlight/label drawings that follow a player
+    calibration_ui.py   calibration panel, per-frame homographies through camera motion, run stats
     timeline.py         timeline widget and transport bar
     bookmarks.py        incident list, bookmark/category dialogs
     panels.py           tool palette, drawing properties, layers, telestrator bar
@@ -114,6 +118,23 @@ UI thread ── hover/bookmark thumbs ─▶ ThumbnailWorker thread (own VideoS
 - **Commentary**: mono 48 kHz WAVs next to the project; the mixer adds them at media time *before*
   time-stretching (so the voice keeps its pitch at any speed) and ducks the game with 120 ms ramps.
 
+## Milestone 4 internals
+
+- **Tracker**: a 12×12 grid of points in the player's box is tracked with pyramidal Lucas–Kanade and
+  checked backwards (forward–backward error); the box moves by the median displacement. A smoothed
+  velocity acts as a motion model: when the points' motion disagrees with what the player can physically
+  do (a team-mate passing in front), only points consistent with the model are used, and if none are,
+  the tracker coasts along the predicted path for up to 1.5 s before reporting the player lost. A
+  normalised cross-correlation check against the player's original appearance prevents slow drift.
+  Results become per-frame keyframes, so tracked highlights are ordinary animated drawings.
+- **Camera motion**: corners (Shi–Tomasi) on a 640-px-wide frame, LK flow, RANSAC homography. Valid for
+  pan/tilt/zoom cameras (fixed position), i.e. broadcast-style views.
+- **Calibration**: image→pitch homography from ≥4 named landmarks (normalised DLT, least squares with
+  more points; error reported back in pixels). For other frames the service chains camera-motion
+  homographies from the nearest calibration (≤30 s), computed in a background thread and cached.
+- **Run statistics**: feet position (bottom-centre of the tracked box) mapped to the pitch per frame,
+  smoothed over 0.2 s; distance is the path length, top speed the maximum over 0.5 s windows.
+
 ## Data model and undo
 
 - Annotations are stored in **video pixel coordinates** (independent of window size or zoom), with a
@@ -192,7 +213,7 @@ images match the screen exactly. Spotlights are painted first so they darken the
 
 ## Testing
 
-`python -m pytest -q tests` (110 tests):
+`python -m pytest -q tests` (123 tests):
 
 - `test_video.py` — frame accuracy (B-frames, MPEG-4, random/backward/keyframe boundaries, frame-skipping playback), index cache, timecodes
 - `test_document.py` — undo/redo, merging, layering, grouping, bookmarks, geometry/hit tests, project I/O,
@@ -218,5 +239,10 @@ images match the screen exactly. Spotlights are painted first so they darken the
   the player and in the app (F key, Space), MP4 export (exact frames, burned-in drawings, freeze holds
   with silence, sound length, title cards, downscaling), commentary mixing/ducking, commentary in export,
   recording with a test microphone and carrying recordings on Save As
+
+- `test_milestone4.py` — tracker accuracy with a same-kit team-mate crossing behind and in front, lost
+  detection, camera-pan measurement, highlight↔box conversions, the Track tool and *Track from here* in
+  the app, homography solving (perspective camera, bad input), calibration carried through a camera pan,
+  speed/distance of a player with known speed, and the full calibrate → measure → stats → board flow
 
 `FC27TacticalStudio.exe --selfcheck` runs a smoke test inside the packaged build (used by CI).

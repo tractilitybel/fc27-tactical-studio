@@ -177,6 +177,8 @@ SHORTCUTS: dict[str, tuple[str, str, str]] = {
     "view.zoom_in": ("View", "Zoom in", "Ctrl+="),
     "view.zoom_out": ("View", "Zoom out", "Ctrl+-"),
     "view.hide_drawings": ("View", "Show / hide drawings", "H"),
+    "view.pitch_lines": ("View", "Show pitch lines (calibration)", "Ctrl+Shift+P"),
+    "tool.calibrate": ("Tools", "Calibrate pitch…", "Ctrl+K"),
     "help.card": ("Help", "Shortcut reference card", "F1"),
 }
 

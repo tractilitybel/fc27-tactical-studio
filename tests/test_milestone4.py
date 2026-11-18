@@ -152,3 +152,107 @@ def test_track_tool_creates_following_ring(qapp, win, track_video):
     assert ring.keyframes[-1]["frame"] >= 75
     win.doc.undo.undo()
     assert ring.keyframes[-1]["frame"] < 75 or ring.end_frame >= 70
+
+
+# ------------------------------------------------------------ calibration
+from fc27studio.core.calibration import LANDMARKS, apply_h, distance_m, lines_in_image, solve  # noqa: E402
+
+PX_PER_M = 10.0
+CALIB_NAMES = ["Centre spot", "Halfway line – top", "Left penalty spot", "Left box – top front corner",
+               "Left box – bottom front corner"]
+
+
+def calib_points(px_per_m=PX_PER_M, offset=(0.0, 0.0), noise=0.0, seed=0):
+    rng = np.random.default_rng(seed)
+    return [{"name": n, "x": LANDMARKS[n][0] * px_per_m + offset[0] + rng.normal(0, noise),
+             "y": LANDMARKS[n][1] * px_per_m + offset[1] + rng.normal(0, noise)} for n in CALIB_NAMES]
+
+
+def test_solve_perspective_camera():
+    Ht = np.array([[14.0, -3.0, 120.0], [0.4, 4.5, 260.0], [0.0, 0.0045, 1.0]])   # pitch -> image
+    names = CALIB_NAMES + ["Centre circle – bottom"]
+    pts = [{"name": n, "x": apply_h(Ht, [LANDMARKS[n]])[0][0], "y": apply_h(Ht, [LANDMARKS[n]])[0][1]}
+           for n in names]
+    H, err, msg = solve(pts)
+    assert err < 0.01 and "✓" in msg
+    a, b = apply_h(Ht, [LANDMARKS["Left penalty spot"], LANDMARKS["Centre spot"]])
+    assert distance_m(H, a, b) == pytest.approx(41.5, abs=0.01)
+    assert lines_in_image(H)
+
+
+def test_solve_rejects_bad_input():
+    assert solve(calib_points()[:3])[0] is None
+    line = [{"name": n, "x": i * 10.0, "y": 5.0} for i, n in enumerate(
+        ["Halfway line – top", "Centre circle – top", "Centre spot", "Halfway line – bottom"])]
+    H, _e, msg = solve(line)
+    assert H is None and "one line" in msg
+    pts = calib_points()
+    pts[0]["x"] += 80                                   # one point on the wrong spot
+    assert "wrong" in solve(pts)[2] or solve(pts)[1] > 5
+
+
+def test_service_follows_camera_and_player_stats(qapp, track_video):
+    """Calibrate frame 0, let the service measure the camera pan, and check the
+    tracked player's speed against the known synthetic motion."""
+    from fc27studio.core.calibration import Calibration
+    from fc27studio.core.video import build_index
+    from fc27studio.ui.calibration_ui import CalibrationService, run_stats
+    path, truth = track_video
+    H0, _e, _m = solve(calib_points())
+    svc = CalibrationService()
+    svc.set_video(path, build_index(path), 30.0, 90)
+    svc.set_calibrations([Calibration(0, calib_points(), list(H0.ravel()))])
+    svc.ensure(0, 60)
+    assert wait_for(qapp, lambda: svc.get(60) is not None, 20)
+    # The camera panned 5 px/frame: a world point keeps its pitch position across frames.
+    p0 = apply_h(svc.get(0), [(400.0, 300.0)])[0]
+    p60 = apply_h(svc.get(60), [(400.0 - 5 * 60, 300.0)])[0]
+    assert np.allclose(p0, p60, atol=0.5)
+    boxes = {f: list(truth[f]) for f in range(0, 61)}
+    st = run_stats(boxes, 30.0, svc.get)
+    _f, _P, dist, top, avg = st
+    # Player runs 6 px/frame in the world = 0.6 m/frame = 18 m/s (+ a small sideways wave).
+    assert 64 <= top <= 75, top
+    assert 33 <= dist <= 40, dist
+    svc.stop()
+
+
+def test_calibrate_in_app_then_measure_and_stats(qapp, win, track_video):
+    from fc27studio.core.model import Kind
+    from fc27studio.ui.render import measure_text
+    _path, truth = track_video
+    win.start_calibration()
+    assert win.calibrating and win.canvas.tool == "calibrate"
+    cv = win.canvas
+    for pt in calib_points():
+        win.calib_panel.picker.selected = pt["name"]
+        win.calib_panel.picker.picked.emit(pt["name"])
+        QTest.mouseClick(cv, Qt.LeftButton, Qt.NoModifier, cv.to_widget(QPointF(pt["x"], pt["y"])).toPoint())
+    assert len(win.calib_panel.points) == 5 and win.calib_panel.H is not None
+    assert win.canvas.show_pitch_lines
+    win.save_calibration()
+    assert len(win.doc.project.calibrations) == 1
+    assert any(m.kind == "calib" for m in win.timeline.markers)
+    win.end_calibration()
+    # Measure on the video now reads metres (centre spot to penalty spot = 41.5 m)
+    win.choose_tool(Kind.MEASURE)
+    a = cv.to_widget(QPointF(110, 340)).toPoint()
+    b = cv.to_widget(QPointF(525, 340)).toPoint()
+    QTest.mousePress(cv, Qt.LeftButton, Qt.NoModifier, a)
+    QTest.mouseMove(cv, (a + b) / 2)
+    QTest.mouseRelease(cv, Qt.LeftButton, Qt.NoModifier, b)
+    m = next(x for x in win.doc.project.annotations if x.kind == Kind.MEASURE)
+    txt = measure_text(m, None, win.calib.get(0))
+    assert abs(float(txt.split()[0]) - 41.5) < 1.0, txt
+    # Track a player: the panel shows distance/speed and can draw the run on a board
+    win.properties.track_style.setCurrentIndex(win.properties.track_style.findData("ring"))
+    win.properties.track_secs.setValue(2.0)
+    win.choose_tool("track")
+    drag_box(cv, truth[0])
+    ring = next(x for x in win.doc.project.annotations if x.track_style == "ring")
+    win.canvas.set_selection({ring.id})
+    assert wait_for(qapp, lambda: "km/h" in win.properties.track_stats.text(), 20)
+    win.run_to_board()
+    assert win.workspace == "board"
+    kinds = [x.kind for x in win.current_board().annotations]
+    assert Kind.FREEHAND in kinds

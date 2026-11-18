@@ -111,13 +111,15 @@ class VideoExporter:
     """Renders segments into one MP4. ``progress(fraction, text)`` may raise Cancelled."""
 
     def __init__(self, project: Project, video_path: str, index_data, opts: ExportOptions,
-                 commentary_mixer=None, progress: Optional[Callable[[float, str], None]] = None):
+                 commentary_mixer=None, progress: Optional[Callable[[float, str], None]] = None,
+                 homography_at: Optional[Callable[[int], object]] = None):
         self.project = project
         self.video_path = video_path
         self.index_data = index_data
         self.opts = opts
         self.mixer = commentary_mixer      # callable(t0, n) -> float32 (n, 2) or None
         self.progress = progress or (lambda f, t: None)
+        self.homography_at = homography_at
 
     # ------------------------------------------------------------ helpers
     def _out_size(self, w: int, h: int) -> tuple[int, int]:
@@ -212,7 +214,8 @@ class VideoExporter:
                     img = ndarray_to_qimage(src.frame(f))
                     if o.drawings:
                         anns = [posed(a, f) for a in self.project.annotations_at(f)]
-                        img = render_frame(img, anns)
+                        homog = self.homography_at(f) if self.homography_at else None
+                        img = render_frame(img, anns, None, homog)
                     if (img.width(), img.height()) != (W, H):
                         img = img.scaled(W, H, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
                     rgb = _qimage_to_rgb(img)

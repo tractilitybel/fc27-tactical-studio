@@ -36,10 +36,11 @@ class ExportWorker(QObject):
     progressed = Signal(float)
     finished = Signal(list, str)   # written paths, error message ("" = ok, "cancelled")
 
-    def __init__(self, jobs, project, video_path, index_data, mixer):
+    def __init__(self, jobs, project, video_path, index_data, mixer, homography_at=None):
         super().__init__()
         self.jobs = jobs           # list of (ExportOptions, [Segment])
         self.project, self.video_path, self.index_data, self.mixer = project, video_path, index_data, mixer
+        self.homography_at = homography_at
         self.cancel = False
 
     @Slot()
@@ -55,7 +56,7 @@ class ExportWorker(QObject):
                         raise Cancelled()
                     self.progressed.emit((i + f) / n)
                 written.append(VideoExporter(self.project, self.video_path, self.index_data, opts,
-                                             self.mixer, prog).run(segs))
+                                             self.mixer, prog, self.homography_at).run(segs))
             log(f"done: {written}")
             self._finish(written, "")
         except Cancelled:
@@ -304,7 +305,8 @@ def run_export(win, jobs) -> Optional[list]:
     """Run export jobs in a background thread with a progress dialog."""
     pl = win.player
     mixer = win.commentary_mixer() if hasattr(win, "commentary_mixer") else None
-    worker = ExportWorker(jobs, win.doc.project, pl.source.path, pl.index_data, mixer)
+    homog = win.calib.snapshot() if hasattr(win, "calib") else None
+    worker = ExportWorker(jobs, win.doc.project, pl.source.path, pl.index_data, mixer, homog)
     thread = QThread()
     worker.moveToThread(thread)
     dlg = QProgressDialog("Rendering video…", "Cancel", 0, 1000, win)

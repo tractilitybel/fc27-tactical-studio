@@ -212,6 +212,11 @@ class MainWindow(QMainWindow):
         vl.addWidget(self.transport)
         self._segmenter = None
         self._segmenter_error: Optional[str] = None
+        from .calibration_ui import CalibrationPanel, CalibrationService
+        self.calib = CalibrationService(self)
+        self.calib_panel = CalibrationPanel()
+        self.calibrating = False
+        self.canvas.homography_provider = self.calib.get
         self.canvas.segmenter_provider = self._get_segmenter
         self.board_canvas = Canvas()
         self.board_canvas.board_mode = True
@@ -348,6 +353,8 @@ class MainWindow(QMainWindow):
         A("view.zoom_in", lambda: self.cv.zoom_by(1.25))
         A("view.zoom_out", lambda: self.cv.zoom_by(0.8))
         A("view.hide_drawings", self.toggle_drawings, checkable=True)
+        A("view.pitch_lines", self.toggle_pitch_lines, checkable=True)
+        A("tool.calibrate", self.start_calibration)
         self.actions["view.hide_drawings"].setChecked(True)
         self.actions["view.hide_drawings"].setText("Show drawings")
         A("help.card", self.shortcut_card)
@@ -411,7 +418,8 @@ class MainWindow(QMainWindow):
         for k in ("view.presentation", "view.fullscreen"):
             v.addAction(a[k])
         v.addSeparator()
-        for k in ("view.zoom_fit", "view.zoom_100", "view.zoom_in", "view.zoom_out", "view.hide_drawings"):
+        for k in ("view.zoom_fit", "view.zoom_100", "view.zoom_in", "view.zoom_out", "view.hide_drawings",
+                  "view.pitch_lines"):
             v.addAction(a[k])
         v.addSeparator()
         v.addAction("Zoom timeline in", lambda: self.timeline.zoom(2.0))
@@ -462,6 +470,7 @@ class MainWindow(QMainWindow):
         t = mb.addMenu("&Tools")
         for tool in ["select"] + Kind.ALL + [Kind.CUTOUT, "track"]:
             t.addAction(a[f"tool.{tool}"])
+        t.addAction(a["tool.calibrate"])
         tb = t.addMenu("Tactics board")
         for tool in (Kind.TOKEN, Kind.BALL, Kind.MEASURE):
             tb.addAction(a[f"tool.{tool}"])
@@ -502,6 +511,14 @@ class MainWindow(QMainWindow):
         tr.speedChosen.connect(pl.set_speed)
         pl.freezeChanged.connect(self._on_freeze_changed)
         self.canvas.trackRequested.connect(self.track_player)
+        self.canvas.calibrationClicked.connect(self._calib_click)
+        self.calib.updated.connect(self._on_calib_updated)
+        self.calib_panel.pointsChanged.connect(self._calib_points_changed)
+        self.calib_panel.saveRequested.connect(self.save_calibration)
+        self.calib_panel.deleteRequested.connect(self.delete_calibration)
+        self.calib_panel.closeRequested.connect(self.end_calibration)
+        self.properties.stats_provider = self._track_stats_text
+        self.properties.track_board_requested = self.run_to_board
         self.properties.track_continue_requested = self.track_continue
         self.properties.seek_request = lambda f: (pl.pause(), pl.seek(f))
         tr.btn_rec.clicked.connect(self.toggle_record)
@@ -564,6 +581,7 @@ class MainWindow(QMainWindow):
         self.select_board(doc.project.boards[0].id if doc.project.boards else None)
         self._sync_freezes()
         self._refresh_mixer()
+        self.calib.set_calibrations(doc.project.calibrations)
         self._on_doc_changed("bookmarks")
         self._on_doc_changed("annotations")
         self._on_undo_changed()
@@ -598,6 +616,9 @@ class MainWindow(QMainWindow):
         if what in ("commentary", "project"):
             self._refresh_markers()
             self._refresh_mixer()
+        if what in ("calibrations", "project"):
+            self._refresh_markers()
+            self.calib.set_calibrations(self.doc.project.calibrations)
         if what in ("board", "boards"):
             self.board_canvas.prune_selection()
             self.board_canvas.update()
@@ -626,6 +647,8 @@ class MainWindow(QMainWindow):
         markers = [Marker(b.id, b.frame, b.end_frame, p.category_color(b.category),
                           f"{b.category}: {b.title}") for b in p.bookmarks]
         fps = self.player.fps or 30.0
+        markers += [Marker(c.id, c.frame, None, "#3cdc78", "Pitch calibration (double-click to edit)", "calib")
+                    for c in p.calibrations]
         markers += [Marker(c.id, c.frame, c.frame + int(c.seconds * fps), "#b46cff",
                            f"Commentary: {c.name or 'voice'} ({c.seconds:.1f} s) — double-click to edit", "voice")
                     for c in p.commentary]
@@ -664,6 +687,7 @@ class MainWindow(QMainWindow):
 
     def _on_marker_clicked(self, mid: str) -> None:
         if any(f.id == mid for f in self.doc.project.freezes) or \
+                any(c.id == mid for c in self.doc.project.calibrations) or \
                 any(c.id == mid for c in self.doc.project.commentary):
             self.player.pause()
             return
@@ -677,6 +701,11 @@ class MainWindow(QMainWindow):
         fz = next((f for f in self.doc.project.freezes if f.id == mid), None)
         if fz is not None:
             self.edit_freeze(fz)
+            return
+        cal = next((c for c in self.doc.project.calibrations if c.id == mid), None)
+        if cal is not None:
+            self.player.seek(cal.frame)
+            self.start_calibration()
             return
         cm = next((c for c in self.doc.project.commentary if c.id == mid), None)
         if cm is not None:
@@ -736,6 +765,8 @@ class MainWindow(QMainWindow):
     def _on_image(self, index: int, img: QImage) -> None:
         self.canvas.set_image(img)
         self.canvas.set_frame(index)
+        if not self.player.playing and self._needs_homography():
+            self.calib.ensure(index)
         pending = getattr(self, "_pending_select", None)
         if pending and pending[0] == index:
             self._pending_select = None
@@ -842,6 +873,7 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Couldn't follow that player — try dragging a box around him.", 6000)
             return
         style = self.properties.track_style.currentData()
+        self.calib.add_steps(res.camera)
         anns = make_tracked(style, box, start, self.canvas.style.color, self.properties.track_label.text().strip(),
                             self.canvas.style.width)
         for a in anns:
@@ -867,10 +899,139 @@ class MainWindow(QMainWindow):
         res = self._run_tracking(f, box, end)
         if res is None or len(res.boxes) < 2:
             return
+        self.calib.add_steps(res.camera)
         ids = [a.id for a in sel]
         self.doc.modify_annotations(ids, lambda a: apply_track(a, res), "Track from here")
         self.canvas.sync_animation()
         self._tracking_summary(res)
+
+    # ======================================================== calibration
+    def _needs_homography(self) -> bool:
+        if self.canvas.show_pitch_lines or self.calibrating:
+            return True
+        return any(a.kind == Kind.MEASURE for a in self.doc.annotations_at(self.player.current))
+
+    def toggle_pitch_lines(self) -> None:
+        self.canvas.show_pitch_lines = not self.canvas.show_pitch_lines
+        self.actions["view.pitch_lines"].setChecked(self.canvas.show_pitch_lines)
+        if self.canvas.show_pitch_lines:
+            if not self.doc.project.calibrations:
+                self.statusBar().showMessage("No calibration yet — use Tools → Calibrate pitch (Ctrl+K).", 5000)
+            self.calib.ensure(self.player.current)
+        self.canvas.update()
+
+    def start_calibration(self) -> None:
+        if not self._need_video():
+            return
+        self.player.pause()
+        if self.workspace != "tactics":
+            self.set_workspace("tactics")
+        self.calibrating = True
+        f = self.player.current
+        existing = next((c for c in self.doc.project.calibrations if c.frame == f), None)
+        self.calib_panel.load(existing.points if existing else [])
+        self.canvas.calib_points = self.calib_panel.points
+        if self.side.indexOf(self.calib_panel) < 0:
+            self.side.addTab(self.calib_panel, "Calibrate")
+        self.side.setCurrentWidget(self.calib_panel)
+        self.canvas.set_tool("calibrate")
+        self.canvas.show_pitch_lines = True
+        self.actions["view.pitch_lines"].setChecked(True)
+        self.canvas.update()
+        self.statusBar().showMessage("Calibrating this frame: pick a point on the mini pitch, then click it on "
+                                     "the video.", 8000)
+
+    def _calib_click(self, x: float, y: float) -> None:
+        if self.calibrating and self.calib_panel.place(x, y):
+            self.canvas.calib_points = self.calib_panel.points
+            self.canvas.update()
+
+    def _calib_points_changed(self) -> None:
+        self.canvas.calib_points = self.calib_panel.points
+        H = self.calib_panel.H              # live preview of the pitch lines while placing points
+        f = self.player.current
+        if H is not None:
+            self.calib.cache[f] = H
+        else:
+            self.calib.cache.pop(f, None)
+        self.canvas._overlay_cache = (None, None)
+        self.canvas.update()
+
+    def save_calibration(self) -> None:
+        from ..core.calibration import Calibration
+        H = self.calib_panel.H
+        if H is None:
+            return
+        c = Calibration(self.player.current, [dict(p) for p in self.calib_panel.points],
+                        [float(v) for v in H.ravel()])
+        self.doc.set_calibration(c)
+        self.statusBar().showMessage("Calibration saved. Measure (Shift+M) now shows metres; tracked players "
+                                     "show distance and speed.", 6000)
+
+    def delete_calibration(self) -> None:
+        f = self.player.current
+        c = next((c for c in self.doc.project.calibrations if c.frame == f), None)
+        if c is not None:
+            self.doc.remove_calibration(c.id)
+        self.calib_panel.load([])
+        self._calib_points_changed()
+
+    def end_calibration(self) -> None:
+        self.calibrating = False
+        self.canvas.calib_points = []
+        i = self.side.indexOf(self.calib_panel)
+        if i >= 0:
+            self.side.removeTab(i)
+        self.canvas.set_tool("select")
+        self.calib.set_calibrations(self.doc.project.calibrations)
+        self.canvas.update()
+
+    def _on_calib_updated(self) -> None:
+        self.canvas._overlay_cache = (None, None)
+        self.canvas.update()
+        self.properties.sync()
+
+    def _track_stats_text(self, a):
+        """(text, can_send_to_board) for the tracking panel."""
+        from .calibration_ui import run_stats
+        if not self.doc.project.calibrations:
+            return ("Calibrate the pitch (Ctrl+K) to see distance covered and speed.", False)
+        frames = sorted(int(k) for k in a.track_boxes)
+        if not frames:
+            return ("", False)
+        self.calib.ensure(frames[0], frames[-1])
+        st = run_stats(a.track_boxes, self.player.fps, self.calib.get)
+        if st is None:
+            return ("Measuring camera movement… (distance and speed appear in a moment)", False)
+        _f, _P, dist, top, avg = st
+        return (f"Distance covered: <b>{dist:.1f} m</b><br>Top speed: <b>{top:.1f} km/h</b> · "
+                f"average {avg:.1f} km/h", True)
+
+    def run_to_board(self) -> None:
+        from .board import to_px
+        from .calibration_ui import run_stats
+        sel = [a for a in self.canvas.selected() if a.track_style and a.track_boxes]
+        if not sel:
+            return
+        a = sel[0]
+        st = run_stats(a.track_boxes, self.player.fps, self.calib.get)
+        if st is None:
+            return
+        _f, P, dist, top, _avg = st
+        if self.current_board() is None:
+            self.new_board()
+        board = self.current_board()
+        pts = [to_px(float(x), float(y)) for x, y in P[::max(1, len(P) // 120)]]
+        name = next((s.text for s in sel if s.kind == Kind.TEXT), "") or self.properties.track_label.text()
+        from ..core.model import Annotation
+        path = Annotation(Kind.FREEHAND, pts, 0, 10 ** 9, color=a.color, width=4.0, name=f"Run {dist:.0f} m")
+        tok = Annotation(Kind.TOKEN, [pts[-1]], 0, 10 ** 9, color=a.color, text="", name=name,
+                         font_size=self.board_canvas.token_size)
+        start = Annotation(Kind.CIRCLE, [(pts[0][0] - 6, pts[0][1] - 6), (pts[0][0] + 6, pts[0][1] + 6)],
+                           0, 10 ** 9, color=a.color, width=2.0, fill_opacity=0.0)
+        ScopedDocument(self.doc, board).add_annotations([start, path, tok], "Run on board")
+        self.set_workspace("board")
+        self.statusBar().showMessage(f"Run drawn on “{board.name}”: {dist:.1f} m, top speed {top:.1f} km/h.", 6000)
 
     # ========================================================= commentary
     def project_dir(self) -> Optional[str]:
@@ -1183,7 +1344,7 @@ class MainWindow(QMainWindow):
         self.board_props.sync()
 
     def choose_tool(self, tool: str) -> None:
-        board_only = tool in (Kind.TOKEN, Kind.BALL, Kind.MEASURE)
+        board_only = tool in (Kind.TOKEN, Kind.BALL) or (tool == Kind.MEASURE and self.workspace == "board")
         video_only = tool in (Kind.CUTOUT, Kind.SPOTLIGHT, "track")
         if board_only and self.workspace != "board":
             self.set_workspace("board")
@@ -1640,6 +1801,8 @@ class MainWindow(QMainWindow):
         self.canvas.set_zoom(None)
         self.status_video.setText(f"{i.width}×{i.height} · {i.fps:.2f} fps · {i.codec}")
         self._start_thumbs(path, index)
+        self.calib.set_video(path, index, i.fps, i.frame_count)
+        self.calib.set_calibrations(self.doc.project.calibrations)
         self.audio.open(path)
         self._update_audio_ui()
         self.match_info.load()
