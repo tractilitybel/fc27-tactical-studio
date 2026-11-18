@@ -10,6 +10,11 @@ ORG = "FC27TacticalStudio"
 APP = "FC27TacticalStudio"
 
 
+def qsettings() -> QSettings:
+    """INI-backed settings (in %APPDATA% on Windows) — easy to back up or reset."""
+    return QSettings(QSettings.IniFormat, QSettings.UserScope, ORG, APP)
+
+
 @dataclass
 class Preferences:
     cache_mb: int = 768              # decoded-frame cache budget
@@ -26,7 +31,7 @@ class Preferences:
 
     @classmethod
     def load(cls) -> "Preferences":
-        s = QSettings(ORG, APP)
+        s = qsettings()
         p = cls()
         for f in fields(cls):
             if s.contains("prefs/" + f.name):
@@ -46,7 +51,7 @@ class Preferences:
         return p
 
     def save(self) -> None:
-        s = QSettings(ORG, APP)
+        s = qsettings()
         for f in fields(self):
             s.setValue("prefs/" + f.name, getattr(self, f.name))
         s.sync()
@@ -157,7 +162,7 @@ SHORTCUTS: dict[str, tuple[str, str, str]] = {
 
 
 def load_shortcuts() -> dict[str, str]:
-    s = QSettings(ORG, APP)
+    s = qsettings()
     out = {}
     for aid, (_c, _l, default) in SHORTCUTS.items():
         val = s.value("shortcuts/" + aid)
@@ -166,7 +171,7 @@ def load_shortcuts() -> dict[str, str]:
 
 
 def save_shortcuts(mapping: dict[str, str]) -> None:
-    s = QSettings(ORG, APP)
+    s = qsettings()
     for aid, seq in mapping.items():
         if SHORTCUTS.get(aid, (None, None, None))[2] == seq:
             s.remove("shortcuts/" + aid)

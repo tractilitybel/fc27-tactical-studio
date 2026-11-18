@@ -24,7 +24,7 @@ from .dialogs import (GotoDialog, PreferencesDialog, ShortcutCard, ShortcutsDial
 from .export import export_bookmark_images, export_bookmarks_csv, export_frame, compose, safe_name
 from .panels import PropertiesPanel, TelestratorBar, ToolPalette
 from .playback import Player, ThumbnailWorker
-from .settings import (ORG, APP, SHORTCUTS, Preferences, load_shortcuts, recovery_dir,
+from .settings import (qsettings, SHORTCUTS, Preferences, load_shortcuts, recovery_dir,
                        save_shortcuts)
 from .timeline import Marker, Timeline, Transport
 
@@ -187,6 +187,7 @@ class MainWindow(QMainWindow):
         self.props_scroll = QScrollArea()
         self.props_scroll.setWidget(self.properties)
         self.props_scroll.setWidgetResizable(True)
+        self.props_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.telestrator = TelestratorBar(self.canvas)
         self.telestrator.clear_on_play.setChecked(self.prefs.telestrator_clear_on_play)
         self.match_info = MatchInfoPanel(self)
@@ -436,6 +437,7 @@ class MainWindow(QMainWindow):
             self._refresh_markers()
             self._refresh_playlist()
         if what in ("annotations", "project"):
+            self.canvas.prune_selection()
             self.canvas.update()
             self.properties.sync()
             self._refresh_ranges()
@@ -481,7 +483,7 @@ class MainWindow(QMainWindow):
             pl.addItem(it)
 
     def _sel_doc_ids(self) -> list[str]:
-        return [i for i in self.canvas.selection if not self.canvas.is_temp(i)]
+        return [a.id for a in self.canvas.selected() if not self.canvas.is_temp(a.id)]
 
     # ========================================================= playback
     def _on_image(self, index: int, img: QImage) -> None:
@@ -1037,11 +1039,11 @@ class MainWindow(QMainWindow):
             self.recent_menu.addAction(r, lambda p=r: self.open_project(p))
 
     def _last_dir(self) -> str:
-        d = QSettings(ORG, APP).value("last_dir", "")
+        d = qsettings().value("last_dir", "")
         return d if d and os.path.isdir(d) else os.path.expanduser("~")
 
     def _remember_dir(self, path: str) -> None:
-        QSettings(ORG, APP).setValue("last_dir", os.path.dirname(os.path.abspath(path)))
+        qsettings().setValue("last_dir", os.path.dirname(os.path.abspath(path)))
 
     # ============================================================ export
     def _source_for_export(self) -> Optional[VideoSource]:
@@ -1170,7 +1172,7 @@ class MainWindow(QMainWindow):
 
     # ========================================================== window
     def _restore_geometry(self) -> None:
-        s = QSettings(ORG, APP)
+        s = qsettings()
         g = s.value("window/geometry")
         if isinstance(g, QByteArray):
             self.restoreGeometry(g)
@@ -1185,7 +1187,7 @@ class MainWindow(QMainWindow):
             ev.ignore()
             return
         self.recovery.discard(self.doc.project)
-        s = QSettings(ORG, APP)
+        s = qsettings()
         s.setValue("window/geometry", self.saveGeometry())
         s.setValue("window/splitter", self.splitter.saveState())
         self._stop_thumbs()

@@ -75,25 +75,31 @@ class ColorRow(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        lay = QHBoxLayout(self)
+        lay = QGridLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(3)
-        for c in PALETTE:
+        lay.setHorizontalSpacing(2)
+        lay.setVerticalSpacing(2)
+        cols = 5
+        for i, c in enumerate(PALETTE):
             b = QToolButton()
-            b.setIcon(color_icon(c, 16))
+            b.setObjectName("swatch")
+            b.setIcon(color_icon(c, 14))
             b.setToolTip(c)
             b.setAutoRaise(True)
+            b.setFixedSize(24, 22)
             b.clicked.connect(lambda _c=False, col=c: self.colorChosen.emit(col))
-            lay.addWidget(b)
+            lay.addWidget(b, i // cols, i % cols)
         more = QToolButton()
         more.setText("…")
+        more.setFixedSize(24, 22)
         more.setToolTip("Custom colour")
         more.clicked.connect(self._custom)
-        lay.addWidget(more)
-        lay.addStretch(1)
+        lay.addWidget(more, len(PALETTE) // cols, len(PALETTE) % cols)
         self.current = QLabel()
         self.current.setFixedSize(22, 22)
-        lay.addWidget(self.current)
+        self.current.setToolTip("Current colour")
+        lay.addWidget(self.current, 0, cols + 1, 2, 1, Qt.AlignVCenter)
+        lay.setColumnStretch(cols, 1)
 
     def show_color(self, hex_color: str) -> None:
         self._hex = hex_color
@@ -216,7 +222,7 @@ class PropertiesPanel(QWidget):
         self.sync()
 
     def _doc_ids(self) -> list[str]:
-        return [i for i in self.canvas.selection if not self.canvas.is_temp(i)]
+        return [a.id for a in self.canvas.selected() if not self.canvas.is_temp(a.id)]
 
     def _reorder(self, mode: str) -> None:
         if self.canvas.doc and self._doc_ids():

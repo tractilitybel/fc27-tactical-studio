@@ -215,8 +215,13 @@ def default_control(a: QPointF, b: QPointF) -> QPointF:
 
 
 def paint_annotations(p: QPainter, anns: Iterable[Annotation], frame_rect: QRectF) -> None:
-    for a in sorted(anns, key=lambda a: a.z):
+    for a in sorted(anns, key=paint_order):
         paint_annotation(p, a, frame_rect)
+
+
+def paint_order(a: Annotation):
+    """Spotlights darken the video underneath, so they go below other drawings."""
+    return (a.kind != Kind.SPOTLIGHT, a.z)
 
 
 def render_frame(frame: QImage, anns: Iterable[Annotation]) -> QImage:

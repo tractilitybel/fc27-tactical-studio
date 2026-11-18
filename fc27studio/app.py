@@ -57,6 +57,11 @@ QLabel#hint { color: #8d98a6; }
 QLabel#warning { color: #ff8a65; }
 QLabel#timecode { font-family: "Consolas", "Menlo", monospace; font-size: 11pt; color: #ffffff; }
 QProgressDialog { min-width: 320px; }
+QCheckBox::indicator, QListWidget::indicator { width: 14px; height: 14px; border: 1px solid #56606e;
+    border-radius: 3px; background: #0f1216; }
+QCheckBox::indicator:checked, QListWidget::indicator:checked { background: #3d8bfd; border-color: #3d8bfd;
+    image: none; }
+QToolButton#swatch { padding: 0; font-size: 9pt; }
 QToolTip { background: #1d2128; color: #dfe4ea; border: 1px solid #3a424f; }
 """
 

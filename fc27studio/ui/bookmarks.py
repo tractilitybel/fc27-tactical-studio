@@ -356,7 +356,9 @@ class BookmarkPanel(QWidget):
         it = self._items.get(bid)
         if it is not None:
             self.list.blockSignals(True)
+            self.list.clearSelection()
             self.list.setCurrentItem(it)
+            it.setSelected(True)
             self.list.blockSignals(False)
             self.list.scrollToItem(it)
 

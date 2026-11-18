@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QInputDialog, QMenu, QWidget
 
 from ..core.document import Document
 from ..core.model import Annotation, Kind
-from .render import center_of, default_control, paint_annotation, precise_bbox
+from .render import center_of, default_control, paint_annotation, paint_order, precise_bbox
 
 HANDLE = 5.0          # half size in screen px
 ROT_OFFSET = 26.0     # rotation handle distance above bbox (screen px)
@@ -149,6 +149,13 @@ class Canvas(QWidget):
     def selected(self) -> list[Annotation]:
         return [a for a in (self.find(i) for i in self.selection) if a is not None]
 
+    def prune_selection(self) -> None:
+        """Forget selected ids whose drawings no longer exist (e.g. after undo)."""
+        alive = {i for i in self.selection if self.find(i) is not None}
+        if alive != self.selection:
+            self.selection = alive
+            self.selectionChanged.emit()
+
     def set_selection(self, ids) -> None:
         ids = set(ids)
         if self.doc is not None:
@@ -223,7 +230,7 @@ class Canvas(QWidget):
         p.drawImage(frame_rect, self.image)
         p.setClipRect(frame_rect)
         if self.show_drawings:
-            for a in sorted(self.visible_annotations(), key=lambda a: a.z):
+            for a in sorted(self.visible_annotations(), key=paint_order):
                 paint_annotation(p, a, frame_rect)
         if self._drawing is not None:
             paint_annotation(p, self._drawing, frame_rect)
@@ -334,7 +341,7 @@ class Canvas(QWidget):
     def annotation_at(self, pos_w: QPointF) -> Optional[Annotation]:
         v = self.to_video(pos_w)
         tol = 6 / max(self.scale_factor(), 0.01)
-        for a in sorted(self.visible_annotations(), key=lambda a: -a.z):
+        for a in sorted(self.visible_annotations(), key=paint_order, reverse=True):
             if a.locked:
                 continue
             if a.hit((v.x(), v.y()), tol):

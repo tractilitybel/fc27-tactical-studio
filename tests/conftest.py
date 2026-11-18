@@ -70,7 +70,10 @@ def mpeg4_video(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
-def qapp():
+def qapp(tmp_path_factory):
+    from PySide6.QtCore import QSettings, QStandardPaths
     from PySide6.QtWidgets import QApplication
+    QStandardPaths.setTestModeEnabled(True)
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path_factory.mktemp("settings")))
     app = QApplication.instance() or QApplication([])
     yield app
