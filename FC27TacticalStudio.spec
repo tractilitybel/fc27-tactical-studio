@@ -8,7 +8,7 @@ block_cipher = None
 import os
 from PyInstaller.utils.hooks import collect_data_files
 
-hiddenimports = collect_submodules("av") + collect_submodules("onnxruntime")
+hiddenimports = collect_submodules("av") + collect_submodules("onnxruntime") + ["sounddevice", "_sounddevice"]
 binaries = collect_dynamic_libs("av") + collect_dynamic_libs("onnxruntime")
 
 datas = [
@@ -16,7 +16,7 @@ datas = [
     ("docs/USER_GUIDE.md", "docs"),
     ("LICENSE", "."),
     ("docs/LICENSING.md", "docs"),
-] + collect_data_files("onnxruntime")
+] + collect_data_files("onnxruntime") + collect_data_files("_sounddevice_data")
 
 # AI player-selection model (downloaded by scripts/fetch_models.py)
 if os.path.isfile("fc27studio/models/mobile_sam_image_encoder.onnx"):

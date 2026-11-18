@@ -184,7 +184,7 @@ class BoardPanel(QWidget):
             g.addWidget(apply, r, 3)
             g.addWidget(clear, r, 4)
         hint = QLabel("Drag tokens to move players. Double-click a token to set its number and name. "
-                      "P adds a token in the current colour, O adds the ball, M measures distances.")
+                      "P adds a token in the current colour, O adds the ball, Shift+M measures distances.")
         hint.setWordWrap(True)
         hint.setObjectName("hint")
         g.addWidget(hint, 2, 0, 1, 5)

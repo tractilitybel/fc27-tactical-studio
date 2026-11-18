@@ -11,6 +11,8 @@ playback, incident bookmarks, tactical drawings and a live telestrator for prese
 - Frame-exact playback of MP4/MKV/MOV/AVI/WebM (H.264, HEVC, VP9, AV1… via FFmpeg), including B-frame streams
 - J/K/L shuttle, Space, frame stepping (`,`/`.`), 1 s jumps (←/→), 5 s jumps (↓/↑), go-to time/frame (Ctrl+J)
 - Speeds 0.1× – 4×, reverse play, A/B loop (`[`, `]`, Ctrl+L)
+- Sound like YouTube (new in 1.3): plays at 0.25×–4× with normal pitch, silent while scrubbing/stepping,
+  volume slider, mute (M), audio track choice
 - Zoomable timeline with hover thumbnails, bookmark markers, loop region and drawing ranges
 - Incident bookmarks: categories (custom colours), tags, players, importance, notes, optional clip end,
   thumbnails, search, category/player filters and sorting
@@ -64,7 +66,7 @@ python -m venv .venv
 pip install -r requirements-dev.txt
 python scripts/fetch_models.py   # AI player-selection model (~45 MB)
 python run.py                    # optionally: python run.py path\to\match.mp4
-python -m pytest -q tests        # 74 tests
+python -m pytest -q tests        # 94 tests
 ```
 
 ## Documentation

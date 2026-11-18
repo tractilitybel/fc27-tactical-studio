@@ -46,6 +46,7 @@ jobs:
           Get-Content $log
           if ($p.ExitCode -ne 0) { throw "selfcheck failed with exit code $($p.ExitCode)" }
           if (-not (Select-String -Path $log -Pattern "AI ok" -Quiet)) { throw "AI player selection missing from the build" }
+          if (-not (Select-String -Path $log -Pattern "sound ok" -Quiet)) { throw "sound support missing from the build" }
 
       - name: Zip
         shell: pwsh

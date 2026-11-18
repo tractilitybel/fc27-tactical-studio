@@ -10,6 +10,7 @@ The packaged application includes these third-party components:
 | FFmpeg (bundled in the PyAV wheels) | LGPL v2.1+ **with GPL parts** | The official PyAV wheels include x264 and x265 encoders, which are GPL. |
 | PyAV | BSD 3-Clause | |
 | NumPy | BSD 3-Clause | |
+| sounddevice + PortAudio | MIT | Sound output. |
 | ONNX Runtime | MIT | Runs the AI player-selection model on the CPU. |
 | MobileSAM model (ONNX export by Acly) | MIT | Based on Meta's Segment Anything (Apache 2.0). Downloaded at build time by `scripts/fetch_models.py` and verified by SHA-256. |
 | Python runtime | PSF License | |

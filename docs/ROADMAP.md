@@ -19,6 +19,7 @@ calibration. On the tactics board, distances are already exact.
 - Keyframe animation of drawings (arrows that extend, moving spotlights)
 - Export clips and full analysis videos (MP4) with drawings burned in
 - Voice-over commentary recorded against the timeline
+- (Sound playback was brought forward and shipped in 1.3.)
 
 ## Milestone 4 — Tracking
 - Pitch calibration (four known pitch points) for real distances and angles on the video
@@ -37,7 +38,6 @@ calibration. On the tactics board, distances are already exact.
 - Accessibility, localisation, crash reporting
 
 ## Known limitations of Milestone 1
-- No audio playback: the analysis tools are visual, and audio is planned alongside commentary (M3).
 - 4K60 H.265 playback is CPU-decoded; on mid-range CPUs it drops frames to stay real time (stepping is
   always exact). Hardware decoding is planned for M6.
 - Reverse playback is smooth within the frame cache and becomes approximate across long GOPs.

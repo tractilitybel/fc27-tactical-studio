@@ -31,6 +31,12 @@ The window has four **workspaces** (buttons at the top, or F2 / F3 / F6 / F4):
 | Slower / faster / normal speed | − / = / 0 |
 | Go to a time or frame | Ctrl+J (accepts `12:34`, `1:02:03`, `12:34.15`, `75.5s` or a frame number) |
 
+**Sound** works like YouTube: it plays at every speed from 0.25× to 4× with normal pitch (2× sounds
+faster, not higher), and is silent while paused, scrubbing, stepping frames or playing in reverse.
+Use the speaker button and volume slider in the transport bar, or **M** to mute. If your recording has
+several audio tracks (e.g. game sound and your microphone from OBS), pick one in *Playback → Audio track*.
+Volume and mute are remembered.
+
 The frame box in the transport bar shows the exact frame number; type a number and press Enter to jump.
 
 **A/B loop** — the boxed *Loop* controls in the transport bar repeat a section: press `[` (or **A**) at the
@@ -148,7 +154,7 @@ Press **F6** (or the *Board* button) for a top-down pitch.
   *Clear* removes a team. Click the colour square to change a team's colour.
 - **Drag tokens** to move players. **Double-click** a token to change its number or add a name.
   **P** adds a token in the current colour, **O** adds the ball.
-- **M** measures distances. The label shows real metres (the pitch is 105 × 68 m).
+- **Shift+M** measures distances. The label shows real metres (the pitch is 105 × 68 m).
 - Arrows, runs, lines, zones, circles, rectangles, freehand and text work as on the video. Everything
   is undoable.
 - **Video link**: *Link to current frame* ties the board to a moment; *Show video moment* jumps there.

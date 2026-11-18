@@ -478,6 +478,16 @@ class Transport(QWidget):
             lb.addWidget(w)
         lay.addWidget(self.loop_box)
         lay.addSpacing(10)
+        from PySide6.QtWidgets import QSlider
+        self.btn_mute = _tb("🔊", "Mute / unmute (M)")
+        self.volume = QSlider(Qt.Horizontal)
+        self.volume.setRange(0, 100)
+        self.volume.setValue(100)
+        self.volume.setFixedWidth(80)
+        self.volume.setToolTip("Volume")
+        lay.addWidget(self.btn_mute)
+        lay.addWidget(self.volume)
+        lay.addSpacing(10)
         lay.addWidget(QLabel("Speed"))
         self.speed = QComboBox()
         for s in SPEEDS:
@@ -486,6 +496,22 @@ class Transport(QWidget):
         self.speed.activated.connect(lambda i: self.speedChosen.emit(self.speed.itemData(i)))
         lay.addWidget(self.speed)
         self._updating = False
+
+    def show_audio(self, has_audio: bool, device: bool, muted: bool, volume: float) -> None:
+        if not has_audio:
+            self.btn_mute.setText("🔇")
+            self.btn_mute.setToolTip("This video has no sound")
+        elif not device:
+            self.btn_mute.setText("🔇")
+            self.btn_mute.setToolTip("No sound device found on this PC")
+        else:
+            self.btn_mute.setText("🔇" if muted or volume == 0 else ("🔉" if volume < 0.5 else "🔊"))
+            self.btn_mute.setToolTip("Unmute (M)" if muted else "Mute (M)")
+        self.btn_mute.setEnabled(has_audio and device)
+        self.volume.setEnabled(has_audio and device)
+        self.volume.blockSignals(True)
+        self.volume.setValue(0 if muted else int(round(volume * 100)))
+        self.volume.blockSignals(False)
 
     def _frame_typed(self, v: int) -> None:
         if not self._updating:

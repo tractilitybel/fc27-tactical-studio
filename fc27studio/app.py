@@ -143,7 +143,21 @@ def selfcheck() -> int:
         mask = seg.full_mask(frame.shape, sel)
         assert mask[150:220, 312:328].mean() > 0.8, "AI selection failed"
         ai = "ok"
-    print(f"{APP_NAME} {__version__} selfcheck OK (codec {codec}, PyAV {av.__version__}, AI {ai})")
+    # Sound: the time-stretcher must run, and the sound library must load (a device is optional).
+    from .core.audio import RATE, TimeStretcher
+    tone = np.sin(2 * np.pi * 440 * np.arange(RATE) / RATE).astype(np.float32)
+    y = TimeStretcher().process(np.stack([tone, tone], 1), 2.0)
+    assert abs(len(y) / RATE - 0.5) < 0.05, "time-stretch failed"
+    try:
+        import sounddevice as sd
+        try:
+            sd.query_devices(kind="output")
+            sound = "ok"
+        except Exception:
+            sound = "ok (no device)"
+    except Exception as exc:
+        raise AssertionError(f"sound library missing: {exc}")
+    print(f"{APP_NAME} {__version__} selfcheck OK (codec {codec}, PyAV {av.__version__}, AI {ai}, sound {sound})")
     return 0
 
 

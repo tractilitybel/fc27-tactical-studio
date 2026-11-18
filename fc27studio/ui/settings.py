@@ -23,6 +23,8 @@ class Preferences:
     default_hold_seconds: float = 3.0  # how long a new drawing stays visible
     big_step_seconds: float = 1.0    # Left/Right
     jump_seconds: float = 5.0        # Up/Down
+    volume: float = 1.0
+    muted: bool = False
     show_frame_numbers: bool = True
     timeline_thumbnails: bool = True
     drop_frames: bool = True         # keep real-time speed by dropping frames
@@ -132,6 +134,7 @@ SHORTCUTS: dict[str, tuple[str, str, str]] = {
     "play.toggle_loop": ("Playback", "Toggle A/B loop", "Ctrl+L"),
     "play.clear_loop": ("Playback", "Clear A/B loop", "\\"),
     "play.goto": ("Playback", "Go to time / frame…", "Ctrl+J"),
+    "play.mute": ("Playback", "Mute / unmute sound", "M"),
     # Bookmarks
     "bm.add": ("Bookmarks", "Add bookmark", "B"),
     "bm.add_detailed": ("Bookmarks", "Add bookmark with details…", "Shift+B"),
@@ -152,7 +155,7 @@ SHORTCUTS: dict[str, tuple[str, str, str]] = {
     "tool.cutout": ("Tools", "Player cut-out", "X"),
     "tool.token": ("Tools", "Player token (board)", "P"),
     "tool.ball": ("Tools", "Ball (board)", "O"),
-    "tool.measure": ("Tools", "Measure distance (board)", "M"),
+    "tool.measure": ("Tools", "Measure distance (board)", "Shift+M"),
     "tool.clear_telestrator": ("Tools", "Clear telestrator drawings", "C"),
     # View
     "view.review": ("View", "Review workspace", "F2"),

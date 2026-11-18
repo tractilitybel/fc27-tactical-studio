@@ -129,6 +129,10 @@ class MainWindow(QMainWindow):
         self.doc = Document()
         self.player = Player(self)
         self.player.drop_frames = self.prefs.drop_frames
+        from .audio_out import AudioOutput
+        self.audio = AudioOutput(self.player, parent=self)
+        self.audio.volume = self.prefs.volume
+        self.audio.muted = self.prefs.muted
         self.workspace = "review"
         self.presenting = False
         self._export_src: Optional[VideoSource] = None
@@ -315,6 +319,7 @@ class MainWindow(QMainWindow):
         A("play.toggle_loop", self.toggle_loop, checkable=True)
         A("play.clear_loop", self.clear_loop)
         A("play.goto", self.goto_dialog)
+        A("play.mute", self.toggle_mute)
         A("bm.add", self.quick_bookmark)
         A("bm.add_detailed", self.detailed_bookmark)
         A("bm.next", lambda: self.jump_bookmark(1))
@@ -417,6 +422,10 @@ class MainWindow(QMainWindow):
         p.addSeparator()
         for k in ("play.set_a", "play.set_b", "play.toggle_loop", "play.clear_loop"):
             p.addAction(a[k])
+        p.addSeparator()
+        p.addAction(a["play.mute"])
+        self.track_menu = p.addMenu("Audio track")
+        self.track_menu.aboutToShow.connect(self._fill_track_menu)
 
         b = mb.addMenu("&Bookmarks")
         for k in ("bm.add", "bm.add_detailed", "bm.prev", "bm.next"):
@@ -465,6 +474,10 @@ class MainWindow(QMainWindow):
         tr.btn_loop.clicked.connect(self.toggle_loop)
         tr.frameEntered.connect(lambda f: pl.seek(f))
         tr.speedChosen.connect(pl.set_speed)
+        tr.btn_mute.clicked.connect(self.toggle_mute)
+        tr.volume.valueChanged.connect(self._volume_changed)
+        tr.volume.sliderReleased.connect(self.prefs.save)
+        self.audio.stateChanged.connect(self._update_audio_ui)
         cv = self.canvas
         cv.stepRequested.connect(lambda d: pl.step(d))
         cv.zoomChanged.connect(lambda s: self.status_zoom.setText(f"{s * 100:.0f}%"))
@@ -692,6 +705,35 @@ class MainWindow(QMainWindow):
 
     def toggle_play(self) -> None:
         self.player.toggle()
+
+    # ================================================================ sound
+    def _update_audio_ui(self) -> None:
+        a = self.audio
+        self.transport.show_audio(a.has_audio, a.device_available, a.muted, a.volume)
+
+    def toggle_mute(self) -> None:
+        self.audio.toggle_mute()
+        self.prefs.muted = self.audio.muted
+        self.prefs.save()
+        self._update_audio_ui()
+        self.statusBar().showMessage("Sound muted" if self.audio.muted else "Sound on", 2000)
+
+    def _volume_changed(self, value: int) -> None:
+        self.audio.set_volume(value / 100)
+        self.prefs.volume = self.audio.volume
+        self.prefs.muted = self.audio.muted
+        self._update_audio_ui()
+
+    def _fill_track_menu(self) -> None:
+        m = self.track_menu
+        m.clear()
+        if not self.audio.tracks:
+            m.addAction("(no sound in this video)").setEnabled(False)
+            return
+        for t in self.audio.tracks:
+            act = m.addAction(t.title, lambda i=t.index: self.audio.set_track(i))
+            act.setCheckable(True)
+            act.setChecked(t.index == self.audio.track)
 
     def _nav(self, move) -> None:
         """Keyboard navigation (, . arrows) always returns playback speed to 1x."""
@@ -1191,6 +1233,7 @@ class MainWindow(QMainWindow):
 
     def _close_video(self) -> None:
         self._stop_thumbs()
+        self.audio.close()
         self.player.close()
         if self._export_src is not None:
             self._export_src.close()
@@ -1239,6 +1282,8 @@ class MainWindow(QMainWindow):
         self.canvas.set_zoom(None)
         self.status_video.setText(f"{i.width}×{i.height} · {i.fps:.2f} fps · {i.codec}")
         self._start_thumbs(path, index)
+        self.audio.open(path)
+        self._update_audio_ui()
         self.match_info.load()
         self._refresh_playlist()
         self.bookmarks.refresh()
@@ -1609,9 +1654,11 @@ class MainWindow(QMainWindow):
         s.setValue("window/geometry", self.saveGeometry())
         s.setValue("window/splitter", self.splitter.saveState())
         self._stop_thumbs()
+        self.audio.close()
         self.player.close()
         if self._export_src is not None:
             self._export_src.close()
+        self.prefs.save()
         ev.accept()
 
     def dragEnterEvent(self, ev) -> None:

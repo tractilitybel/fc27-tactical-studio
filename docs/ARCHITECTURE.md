@@ -21,11 +21,13 @@ fc27studio/
     storage.py          .fc27studio I/O, .bak backups, autosave/recovery, video relinking
     imaging.py          PNG codec, polygon masks, mask→outline tracing, cut-outs, background fill
     segment.py          AI player selection (MobileSAM via ONNX Runtime)
+    audio.py            audio decode (any start time), WSOLA time-stretch, background audio engine
   ui/
     main_window.py      window, workspaces, menus/actions, file handling, exports, autosave
     canvas.py           video display + drawing/editing interaction
     render.py           QPainter rendering of annotations (shared by canvas and export)
     playback.py         decode thread, thumbnail thread, Player (clock, speed, loop, J/K/L)
+    audio_out.py        sound card output (sounddevice) and picture/sound sync
     timeline.py         timeline widget and transport bar
     bookmarks.py        incident list, bookmark/category dialogs
     panels.py           tool palette, drawing properties, layers, telestrator bar
@@ -74,6 +76,21 @@ UI thread ── hover/bookmark thumbs ─▶ ThumbnailWorker thread (own VideoS
   (or, with frame dropping disabled, every frame is shown at reduced speed).
 - The canvas only switches to a frame's drawings when that frame's image arrives, so drawings never appear
   over the wrong picture.
+
+## Sound
+
+- `AudioDecoder` decodes one audio stream with PyAV, resampled to 48 kHz stereo float, and starts at
+  the exact sample of any time position (the seek lands before the target and the extra samples are cut).
+- `TimeStretcher` is a streaming WSOLA: 1024-sample Hann windows at 50% overlap, each re-aligned within
+  ±256 samples by cross-correlation (on a 4× decimated mono signal) to the natural continuation of the
+  previous window. Speed changes without pitch change; ~2% of one CPU core.
+- `AudioEngine` decodes and stretches in a background thread, keeping 0.5 s ready, and counts the samples
+  handed to the sound card, so it knows the media time currently being heard (minus device latency).
+- `AudioOutput` applies the YouTube rules (sound while playing forward at 0.25–4×; silent when paused,
+  scrubbing, stepping, reversing or muted) and keeps sync: the picture's clock is nudged towards the
+  sound card's clock every 40 ms (it follows the sound), and seeks or loop wraps (`Player.seeked`)
+  restart the sound at the new position with a 5 ms fade-in. With no audio device, playback is silent
+  and everything else works.
 
 ## Data model and undo
 
@@ -153,7 +170,7 @@ images match the screen exactly. Spotlights are painted first so they darken the
 
 ## Testing
 
-`python -m pytest -q tests` (74 tests):
+`python -m pytest -q tests` (94 tests):
 
 - `test_video.py` — frame accuracy (B-frames, MPEG-4, random/backward/keyframe boundaries, frame-skipping playback), index cache, timecodes
 - `test_document.py` — undo/redo, merging, layering, grouping, bookmarks, geometry/hit tests, project I/O,
@@ -170,5 +187,9 @@ images match the screen exactly. Spotlights are painted first so they darken the
 - `test_ai_select.py` — mask utilities (exact outline tracing, components, holes), mask cut-outs,
   mask choice, and with the model present: selecting a player and refining it, plus click → Enter →
   cut-out in the real window
+
+- `test_audio.py` — exact audio seeking (tones that change every second), second audio track,
+  pitch kept at 0.25–4×, engine timing at 2×, YouTube rules with the real player, seek and loop resync,
+  picture/sound drift under 60 ms, no-device fallback, mute key and volume
 
 `FC27TacticalStudio.exe --selfcheck` runs a smoke test inside the packaged build (used by CI).

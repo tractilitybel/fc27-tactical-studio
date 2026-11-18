@@ -143,6 +143,7 @@ class Player(QObject):
     frameChanged = Signal(int)            # current index changed
     imageReady = Signal(int, QImage)      # decoded image for display
     stateChanged = Signal()               # playing / speed / loop changed
+    seeked = Signal()                     # jump while playing (seek or loop wrap): resync sound
     error = Signal(str)
 
     def __init__(self, parent=None):
@@ -226,6 +227,8 @@ class Player(QObject):
             self._play_t0 = time.perf_counter()
             self._play_f0 = index
         self._set_current(index)
+        if self.playing:
+            self.seeked.emit()
 
     def _set_current(self, index: int) -> None:
         changed = index != self.current
@@ -242,6 +245,18 @@ class Player(QObject):
     def step(self, delta: int) -> None:
         self.pause()
         self.seek(self.current + delta)
+
+    def seconds_precise(self) -> float:
+        """Media time of the playback clock (sub-frame precision while playing)."""
+        if not self.playing or not self.fps:
+            return self.seconds()
+        elapsed = time.perf_counter() - self._play_t0
+        return self._play_f0 / self.fps + elapsed * self.speed * self.direction
+
+    def nudge(self, media_seconds: float) -> None:
+        """Shift the playback clock (used to follow the sound card's clock)."""
+        if self.playing and self.speed:
+            self._play_t0 -= media_seconds / self.speed
 
     def seconds(self, index: Optional[int] = None) -> float:
         i = self.current if index is None else index
@@ -336,6 +351,9 @@ class Player(QObject):
             if self.direction > 0 and target > b:
                 target = a
                 self._play_f0, self._play_t0 = a, time.perf_counter()
+                self._set_current(target)
+                self.seeked.emit()
+                return
             elif self.direction < 0 and target < a:
                 target = b
                 self._play_f0, self._play_t0 = b, time.perf_counter()
