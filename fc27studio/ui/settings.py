@@ -22,6 +22,7 @@ class Preferences:
     autosave_seconds: int = 60
     default_hold_seconds: float = 3.0  # how long a new drawing stays visible
     big_step_seconds: float = 1.0    # Shift+Left/Right
+    jump_seconds: float = 5.0        # Up/Down
     show_frame_numbers: bool = True
     timeline_thumbnails: bool = True
     drop_frames: bool = True         # keep real-time speed by dropping frames
@@ -119,6 +120,8 @@ SHORTCUTS: dict[str, tuple[str, str, str]] = {
     "play.prev_frame": ("Playback", "Previous frame", "Left"),
     "play.big_forward": ("Playback", "Jump forward (big step)", "Shift+Right"),
     "play.big_back": ("Playback", "Jump back (big step)", "Shift+Left"),
+    "play.jump_forward": ("Playback", "Jump forward 5 s", "Up"),
+    "play.jump_back": ("Playback", "Jump back 5 s", "Down"),
     "play.start": ("Playback", "Go to start", "Home"),
     "play.end": ("Playback", "Go to end", "End"),
     "play.slower": ("Playback", "Slower", "-"),

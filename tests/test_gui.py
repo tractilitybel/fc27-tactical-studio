@@ -291,3 +291,22 @@ def test_parse_goto():
     assert parse_time_or_frame("00:10.15", 30) == 315
     assert parse_time_or_frame("2.5s", 60) == 150
     assert parse_time_or_frame("abc", 30) is None
+
+
+def test_up_down_jump(qapp, win):
+    assert win.prefs.jump_seconds == 5.0
+    assert win.actions["play.jump_forward"].shortcut().toString() == "Up"
+    assert win.actions["play.jump_back"].shortcut().toString() == "Down"
+    win.prefs.jump_seconds = 1.0          # test video is only 5 s long (30 fps)
+    win.player.seek(10)
+    wait_for(qapp, lambda: win.canvas.frame == 10)
+    win.canvas.setFocus()
+    QTest.keyClick(win, Qt.Key_Up)
+    assert wait_for(qapp, lambda: win.canvas.frame == 40)
+    assert shown_frame(win) == 40
+    QTest.keyClick(win, Qt.Key_Down)
+    QTest.keyClick(win, Qt.Key_Down)
+    assert wait_for(qapp, lambda: win.canvas.frame == 0)   # clamped at the start
+    win.prefs.jump_seconds = 5.0
+    QTest.keyClick(win, Qt.Key_Up)
+    assert wait_for(qapp, lambda: win.player.current == 149)  # clamped at the end

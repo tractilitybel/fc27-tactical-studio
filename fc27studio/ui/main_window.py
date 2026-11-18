@@ -303,6 +303,8 @@ class MainWindow(QMainWindow):
         A("play.prev_frame", lambda: self.player.step(-1))
         A("play.big_forward", lambda: self.player.seek(self.player.current + self._big_step()))
         A("play.big_back", lambda: self.player.seek(self.player.current - self._big_step()))
+        A("play.jump_forward", lambda: self.jump_seconds(1))
+        A("play.jump_back", lambda: self.jump_seconds(-1))
         A("play.start", lambda: self.player.seek(0))
         A("play.end", lambda: self.player.seek(self.player.frame_count - 1))
         A("play.slower", self.player.slower)
@@ -342,6 +344,7 @@ class MainWindow(QMainWindow):
         self.act_exit_present.setEnabled(False)
         self.addAction(self.act_exit_present)
         self.palette.set_tooltips(self.shortcut_map)
+        self._update_jump_labels()
 
     def _build_menus(self) -> None:
         mb = self.menuBar()
@@ -405,6 +408,7 @@ class MainWindow(QMainWindow):
             p.addAction(a[k])
         p.addSeparator()
         for k in ("play.prev_frame", "play.next_frame", "play.big_back", "play.big_forward",
+                  "play.jump_back", "play.jump_forward",
                   "play.start", "play.end", "play.goto"):
             p.addAction(a[k])
         p.addSeparator()
@@ -643,6 +647,13 @@ class MainWindow(QMainWindow):
 
     def toggle_play(self) -> None:
         self.player.toggle()
+
+    def jump_seconds(self, direction: int) -> None:
+        """Up/Down: jump by the configured number of seconds (keeps playing if playing)."""
+        if not self.player.is_open:
+            return
+        step = max(1, int(round(self.prefs.jump_seconds * self.player.fps)))
+        self.player.seek(self.player.current + direction * step)
 
     def _big_step(self) -> int:
         return max(1, int(round(self.prefs.big_step_seconds * self.player.fps)))
@@ -1473,10 +1484,16 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Export failed", str(exc))
 
     # ======================================================= preferences
+    def _update_jump_labels(self) -> None:
+        j = f"{self.prefs.jump_seconds:g} s"
+        self.actions["play.jump_forward"].setText(f"Jump forward {j}")
+        self.actions["play.jump_back"].setText(f"Jump back {j}")
+
     def preferences(self) -> None:
         d = PreferencesDialog(self, self.prefs)
         if d.exec():
             d.apply()
+            self._update_jump_labels()
             self.player.drop_frames = self.prefs.drop_frames
             self.player.set_cache_mb(self.prefs.cache_mb)
             self.timeline.show_frames = self.prefs.show_frame_numbers

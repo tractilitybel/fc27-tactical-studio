@@ -26,6 +26,7 @@ The window has four **workspaces** (buttons at the top, or F2 / F3 / F6 / F4):
 | Shuttle: reverse / pause / forward (press again for 2×, 4×) | J / K / L |
 | Previous / next frame | ← / → (or mouse wheel over the video) |
 | Jump back / forward (1 s by default) | Shift+← / Shift+→ |
+| Jump back / forward 5 s | ↓ / ↑ |
 | Start / end | Home / End |
 | Slower / faster / normal speed | − / = / 0 |
 | Go to a time or frame | Ctrl+J (accepts `12:34`, `1:02:03`, `12:34.15`, `75.5s` or a frame number) |
