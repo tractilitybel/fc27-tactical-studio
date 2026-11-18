@@ -114,10 +114,28 @@ def selfcheck() -> int:
     return 0
 
 
+def _run_selfcheck(argv) -> int:
+    """Windowed builds have no console, so results can also go to a log file."""
+    log = None
+    if "--selfcheck-log" in argv:
+        i = argv.index("--selfcheck-log")
+        log = argv[i + 1] if i + 1 < len(argv) else None
+    try:
+        code, msg = selfcheck(), "OK"
+    except Exception:
+        code, msg = 1, traceback.format_exc()
+    if log:
+        with open(log, "w", encoding="utf-8") as f:
+            f.write(f"exit={code}\n{msg}\n")
+    if code:
+        sys.stderr.write(msg)
+    return code
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
     if "--selfcheck" in argv:
-        return selfcheck()
+        return _run_selfcheck(argv)
     if sys.platform == "win32":
         try:
             import ctypes

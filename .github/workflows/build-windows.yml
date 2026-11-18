@@ -1,0 +1,60 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q tests
+
+      - name: Build executable
+        run: pyinstaller --noconfirm --clean FC27TacticalStudio.spec
+
+      - name: Verify packaged app
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $log = "$env:RUNNER_TEMP\selfcheck.txt"
+          $p = Start-Process -FilePath "dist\FC27TacticalStudio\FC27TacticalStudio.exe" `
+               -ArgumentList "--selfcheck","--selfcheck-log",$log -Wait -PassThru
+          Get-Content $log
+          if ($p.ExitCode -ne 0) { throw "selfcheck failed with exit code $($p.ExitCode)" }
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist\FC27TacticalStudio -DestinationPath FC27TacticalStudio-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FC27TacticalStudio-windows-x64
+          path: FC27TacticalStudio-windows-x64.zip
+          retention-days: 30
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: FC27TacticalStudio-windows-x64.zip
