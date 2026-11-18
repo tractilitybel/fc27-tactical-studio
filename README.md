@@ -9,7 +9,7 @@ playback, incident bookmarks, tactical drawings and a live telestrator for prese
 
 **Review workspace**
 - Frame-exact playback of MP4/MKV/MOV/AVI/WebM (H.264, HEVC, VP9, AV1… via FFmpeg), including B-frame streams
-- J/K/L shuttle, Space, frame stepping (←/→), big steps (Shift+←/→), go-to time/frame (Ctrl+J)
+- J/K/L shuttle, Space, frame stepping (`,`/`.`), 1 s jumps (←/→), 5 s jumps (↓/↑), go-to time/frame (Ctrl+J)
 - Speeds 0.1× – 4×, reverse play, A/B loop (`[`, `]`, Ctrl+L)
 - Zoomable timeline with hover thumbnails, bookmark markers, loop region and drawing ranges
 - Incident bookmarks: categories (custom colours), tags, players, importance, notes, optional clip end,

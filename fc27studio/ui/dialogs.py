@@ -54,7 +54,7 @@ class PreferencesDialog(QDialog):
         self.step.setRange(0.1, 600)
         self.step.setSuffix(" s")
         self.step.setValue(prefs.big_step_seconds)
-        form.addRow("Shift+Arrow jump", self.step)
+        form.addRow("Left / Right jump", self.step)
         self.jump = QDoubleSpinBox()
         self.jump.setRange(0.5, 600)
         self.jump.setSuffix(" s")

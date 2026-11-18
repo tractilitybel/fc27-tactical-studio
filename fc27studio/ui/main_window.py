@@ -1485,6 +1485,9 @@ class MainWindow(QMainWindow):
 
     # ======================================================= preferences
     def _update_jump_labels(self) -> None:
+        b = f"{self.prefs.big_step_seconds:g} s"
+        self.actions["play.big_forward"].setText(f"Jump forward {b}")
+        self.actions["play.big_back"].setText(f"Jump back {b}")
         j = f"{self.prefs.jump_seconds:g} s"
         self.actions["play.jump_forward"].setText(f"Jump forward {j}")
         self.actions["play.jump_back"].setText(f"Jump back {j}")

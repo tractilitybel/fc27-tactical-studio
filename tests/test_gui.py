@@ -75,9 +75,15 @@ def test_step_keys(qapp, win):
     win.player.seek(10)
     wait_for(qapp, lambda: win.canvas.frame == 10)
     win.canvas.setFocus()
-    QTest.keyClick(win, Qt.Key_Right)
+    QTest.keyClick(win, Qt.Key_Period)
     assert wait_for(qapp, lambda: win.canvas.frame == 11)
-    QTest.keyClick(win, Qt.Key_Left)
+    QTest.keyClick(win, Qt.Key_Comma)
+    QTest.keyClick(win, Qt.Key_Comma)
+    assert wait_for(qapp, lambda: win.canvas.frame == 9)
+    assert shown_frame(win) == 9
+    # Left/Right jump one second (30 frames at 30 fps)
+    QTest.keyClick(win, Qt.Key_Right)
+    assert wait_for(qapp, lambda: win.canvas.frame == 39)
     QTest.keyClick(win, Qt.Key_Left)
     assert wait_for(qapp, lambda: win.canvas.frame == 9)
     assert shown_frame(win) == 9

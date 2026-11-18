@@ -353,10 +353,10 @@ class Transport(QWidget):
         lay.setSpacing(2)
         self.btn_start = _tb("⏮", "Go to start (Home)")
         self.btn_prev_bm = _tb("◆◀", "Previous bookmark (Ctrl+Left)")
-        self.btn_back = _tb("◀|", "Previous frame (Left)")
+        self.btn_back = _tb("◀|", "Previous frame (,)")
         self.btn_rev = _tb("◀", "Play reverse (J)")
         self.btn_play = _tb("▶", "Play / pause (Space)")
-        self.btn_fwd = _tb("|▶", "Next frame (Right)")
+        self.btn_fwd = _tb("|▶", "Next frame (.)")
         self.btn_next_bm = _tb("▶◆", "Next bookmark (Ctrl+Right)")
         self.btn_end = _tb("⏭", "Go to end (End)")
         for b in (self.btn_start, self.btn_prev_bm, self.btn_back, self.btn_rev, self.btn_play,

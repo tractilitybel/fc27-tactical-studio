@@ -24,8 +24,8 @@ The window has four **workspaces** (buttons at the top, or F2 / F3 / F6 / F4):
 |---|---|
 | Play / pause | Space |
 | Shuttle: reverse / pause / forward (press again for 2×, 4×) | J / K / L |
-| Previous / next frame | ← / → (or mouse wheel over the video) |
-| Jump back / forward (1 s by default) | Shift+← / Shift+→ |
+| Previous / next frame | `,` / `.` (or mouse wheel over the video) |
+| Jump back / forward 1 s | ← / → |
 | Jump back / forward 5 s | ↓ / ↑ |
 | Start / end | Home / End |
 | Slower / faster / normal speed | − / = / 0 |

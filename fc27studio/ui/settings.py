@@ -21,7 +21,7 @@ class Preferences:
     decoder_threads: int = 0         # 0 = automatic
     autosave_seconds: int = 60
     default_hold_seconds: float = 3.0  # how long a new drawing stays visible
-    big_step_seconds: float = 1.0    # Shift+Left/Right
+    big_step_seconds: float = 1.0    # Left/Right
     jump_seconds: float = 5.0        # Up/Down
     show_frame_numbers: bool = True
     timeline_thumbnails: bool = True
@@ -116,10 +116,10 @@ SHORTCUTS: dict[str, tuple[str, str, str]] = {
     "play.reverse": ("Playback", "Play reverse / faster reverse (J)", "J"),
     "play.pause": ("Playback", "Pause (K)", "K"),
     "play.forward": ("Playback", "Play / faster forward (L)", "L"),
-    "play.next_frame": ("Playback", "Next frame", "Right"),
-    "play.prev_frame": ("Playback", "Previous frame", "Left"),
-    "play.big_forward": ("Playback", "Jump forward (big step)", "Shift+Right"),
-    "play.big_back": ("Playback", "Jump back (big step)", "Shift+Left"),
+    "play.next_frame": ("Playback", "Next frame", "."),
+    "play.prev_frame": ("Playback", "Previous frame", ","),
+    "play.big_forward": ("Playback", "Jump forward 1 s", "Right"),
+    "play.big_back": ("Playback", "Jump back 1 s", "Left"),
     "play.jump_forward": ("Playback", "Jump forward 5 s", "Up"),
     "play.jump_back": ("Playback", "Jump back 5 s", "Down"),
     "play.start": ("Playback", "Go to start", "Home"),
