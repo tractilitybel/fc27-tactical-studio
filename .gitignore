@@ -6,3 +6,7 @@ dist/
 venv/
 .venv/
 *.fc27studio.autosave
+
+# AI models are downloaded by scripts/fetch_models.py
+fc27studio/models/*.onnx
+fc27studio/models/*.part

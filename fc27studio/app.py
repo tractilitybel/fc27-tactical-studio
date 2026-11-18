@@ -128,7 +128,19 @@ def selfcheck() -> int:
             assert comp.width() == 160
         w = MainWindow()
         w.close()
-    print(f"{APP_NAME} {__version__} selfcheck OK (codec {codec}, PyAV {av.__version__})")
+    from .core import segment
+    ai = "unavailable"
+    model_dir = segment.find_model_dir()
+    if model_dir and segment.runtime_available():
+        frame = np.zeros((360, 640, 3), np.uint8)
+        frame[:] = (45, 130, 50)
+        frame[140:230, 310:330] = (220, 30, 40)
+        seg = segment.PlayerSegmenter(model_dir)
+        sel = seg.start(frame, 320, 170)
+        mask = seg.full_mask(frame.shape, sel)
+        assert mask[150:220, 312:328].mean() > 0.8, "AI selection failed"
+        ai = "ok"
+    print(f"{APP_NAME} {__version__} selfcheck OK (codec {codec}, PyAV {av.__version__}, AI {ai})")
     return 0
 
 
@@ -138,8 +150,15 @@ def _run_selfcheck(argv) -> int:
     if "--selfcheck-log" in argv:
         i = argv.index("--selfcheck-log")
         log = argv[i + 1] if i + 1 < len(argv) else None
+    import contextlib
+    import io
+    buf = io.StringIO()
     try:
-        code, msg = selfcheck(), "OK"
+        with contextlib.redirect_stdout(buf):
+            code = selfcheck()
+        msg = buf.getvalue().strip() or "OK"
+        if sys.stdout is not None:
+            print(msg)
     except Exception:
         code, msg = 1, traceback.format_exc()
     if log:

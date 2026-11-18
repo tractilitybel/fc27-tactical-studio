@@ -17,6 +17,9 @@ echo Installing dependencies...
 python -m pip install --upgrade pip >nul
 python -m pip install -r requirements-dev.txt || goto :error
 
+echo Downloading the AI player-selection model...
+python scripts\fetch_models.py || goto :error
+
 echo Running tests...
 set QT_QPA_PLATFORM=offscreen
 python -m pytest -q tests || goto :error

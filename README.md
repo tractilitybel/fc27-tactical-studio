@@ -24,6 +24,8 @@ playback, incident bookmarks, tactical drawings and a live telestrator for prese
 
 **Player cut-outs and before/after** (new in 1.1)
 - Cut a player out of the frame (X) and drag, scale or rotate them to where they should have been
+- **AI player selection** (new in 1.2): click a player and the AI finds their exact outline — head to
+  boots — in under half a second, offline on your CPU; extra clicks add or remove parts
 - The gap is filled with surrounding pitch texture; a faded "ghost", outline and arrow show the original spot
 - Before/after comparison (Y): draggable split view or side-by-side; export before/after images
 - Any drawing can be set to show only in "before", only in "after", or both
@@ -60,8 +62,9 @@ download **FC27TacticalStudio-windows-x64** → unzip → run `FC27TacticalStudi
 python -m venv .venv
 .venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
 pip install -r requirements-dev.txt
+python scripts/fetch_models.py   # AI player-selection model (~45 MB)
 python run.py                    # optionally: python run.py path\to\match.mp4
-python -m pytest -q tests        # 65 tests
+python -m pytest -q tests        # 74 tests
 ```
 
 ## Documentation

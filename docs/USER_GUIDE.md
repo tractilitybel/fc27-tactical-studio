@@ -94,9 +94,14 @@ Ctrl+0 fits the video to the window, Ctrl+1 shows it at 100%.
 Show where a player *should* have been, on the real footage:
 
 1. Pause on the moment and switch to **Tactics** (F3).
-2. Press **X** (or the ✂ tool) and **drag around the player** in one movement, like a lasso.
-   You can also click points around them and press Enter (or double-click) to finish.
-   Trace a little outside the player's outline; the edge is softened automatically.
+2. Press **X** (or the ✂ tool) and **click on the player's shirt**. The AI outlines them — head, arms,
+   legs and boots — and shows the selection in blue. Then:
+   - **Left-click** a part that was missed (e.g. a leg) to add it;
+   - **Right-click** something that shouldn't be included (e.g. a teammate touching them) to remove it;
+   - **Enter** or **double-click** to cut the player out, **Esc** to cancel.
+
+   You can also **drag around the player** like a lasso instead; that works without the AI too.
+   The AI runs on your own PC (no internet needed) and takes under half a second per click.
 3. The player is lifted out and selected, so **drag them to the right position**. Corner handles scale
    (always in proportion), the round handle rotates.
 4. The original spot is filled with nearby pitch texture (grass stripes and lines continue through it).

@@ -225,3 +225,151 @@ def seamless(src: np.ndarray, dst: np.ndarray, hole: np.ndarray, iters: int = 40
     out = dst.copy()
     out[hole] = (src + corr)[hole]
     return out
+
+
+# ------------------------------------------------------------ masks → cut-outs
+def largest_component(mask: np.ndarray, seed: Optional[tuple[int, int]] = None) -> np.ndarray:
+    """Keep the 8-connected component containing *seed* (x, y), or the largest one."""
+    m = mask.astype(bool)
+    if not m.any():
+        return m
+    h, w = m.shape
+    labels = np.zeros((h, w), np.int32)
+    sizes = [0]
+    cur = 0
+    ys, xs = np.nonzero(m)
+    for y0, x0 in zip(ys, xs):
+        if labels[y0, x0]:
+            continue
+        cur += 1
+        stack = [(y0, x0)]
+        labels[y0, x0] = cur
+        n = 0
+        while stack:
+            y, x = stack.pop()
+            n += 1
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    yy, xx = y + dy, x + dx
+                    if 0 <= yy < h and 0 <= xx < w and m[yy, xx] and not labels[yy, xx]:
+                        labels[yy, xx] = cur
+                        stack.append((yy, xx))
+        sizes.append(n)
+    if seed is not None:
+        sx, sy = int(round(seed[0])), int(round(seed[1]))
+        if 0 <= sy < h and 0 <= sx < w and labels[sy, sx]:
+            return labels == labels[sy, sx]
+    return labels == int(np.argmax(sizes))
+
+
+def fill_holes(mask: np.ndarray) -> np.ndarray:
+    """Fill enclosed holes (background not connected to the border)."""
+    m = mask.astype(bool)
+    h, w = m.shape
+    outside = np.zeros((h + 2, w + 2), bool)
+    free = np.pad(~m, 1, constant_values=True)
+    outside[0, 0] = True
+    frontier = [(0, 0)]
+    while frontier:
+        y, x = frontier.pop()
+        for yy, xx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
+            if 0 <= yy < h + 2 and 0 <= xx < w + 2 and free[yy, xx] and not outside[yy, xx]:
+                outside[yy, xx] = True
+                frontier.append((yy, xx))
+    return ~outside[1:-1, 1:-1]
+
+
+def trace_outline(mask: np.ndarray) -> list[Point]:
+    """Outer boundary of a single blob as a polygon (pixel-corner coordinates),
+    traced along pixel edges so the polygon encloses exactly the mask pixels."""
+    m = np.pad(mask.astype(bool), 1)
+    h, w = m.shape
+    # Directed boundary edges with the filled pixel on the right-hand side.
+    nxt: dict[tuple[int, int], tuple[int, int]] = {}
+    ys, xs = np.nonzero(m)
+    for y, x in zip(ys, xs):
+        if not m[y - 1, x]:
+            nxt[(x, y)] = (x + 1, y)
+        if not m[y, x + 1]:
+            nxt[(x + 1, y)] = (x + 1, y + 1)
+        if not m[y + 1, x]:
+            nxt[(x + 1, y + 1)] = (x, y + 1)
+        if not m[y, x - 1]:
+            nxt[(x, y + 1)] = (x, y)
+    if not nxt:
+        return []
+    start = min(nxt)  # top-left-most vertex lies on the outer boundary
+    poly = [start]
+    p = nxt[start]
+    guard = len(nxt) + 2
+    while p != start and guard:
+        poly.append(p)
+        p = nxt.get(p, start)
+        guard -= 1
+    return [(x - 1.0, y - 1.0) for x, y in poly]
+
+
+def simplify_polygon(points: list[Point], tol: float) -> list[Point]:
+    """Ramer–Douglas–Peucker for a closed polygon."""
+    if len(points) < 8:
+        return list(points)
+
+    def rdp(pts):
+        if len(pts) < 3:
+            return pts
+        a, b = np.array(pts[0]), np.array(pts[-1])
+        d = b - a
+        L = np.hypot(*d)
+        arr = np.array(pts[1:-1])
+        if L == 0:
+            dist = np.hypot(*(arr - a).T)
+        else:
+            dist = np.abs(d[0] * (arr[:, 1] - a[1]) - d[1] * (arr[:, 0] - a[0])) / L
+        i = int(np.argmax(dist))
+        if dist[i] > tol:
+            return rdp(pts[:i + 2])[:-1] + rdp(pts[i + 1:])
+        return [pts[0], pts[-1]]
+    # Split at the farthest point from the first so both halves are open chains.
+    arr = np.array(points)
+    far = int(np.argmax(np.hypot(*(arr - arr[0]).T)))
+    a = rdp(list(points[:far + 1]))
+    b = rdp(list(points[far:]) + [points[0]])
+    return a[:-1] + b[:-1]
+
+
+def mask_to_polygon(mask: np.ndarray, seed: Optional[tuple[float, float]] = None,
+                    tol: float = 0.8) -> list[Point]:
+    blob = fill_holes(largest_component(mask, seed))
+    return simplify_polygon(trace_outline(blob), tol)
+
+
+def make_cutout_from_mask(frame: np.ndarray, mask: np.ndarray, fill: bool = True,
+                          seed: Optional[tuple[float, float]] = None) -> Optional[tuple[Cutout, list[Point]]]:
+    """Cut-out from a full-frame boolean mask (e.g. from AI segmentation).
+    Returns the cut-out and an outline polygon for editing."""
+    blob = fill_holes(largest_component(mask, seed))
+    if blob.sum() < 12:
+        return None
+    poly = simplify_polygon(trace_outline(blob), 0.8)
+    if len(poly) < 3:
+        return None
+    H, W = frame.shape[:2]
+    ys, xs = np.nonzero(blob)
+    pad = 6
+    x0, y0 = max(0, xs.min() - pad), max(0, ys.min() - pad)
+    x1, y1 = min(W, xs.max() + 1 + pad), min(H, ys.max() + 1 + pad)
+    sub = blob[y0:y1, x0:x1]
+    # Soft 1-px edge for a clean composite.
+    cov = box_blur(sub.astype(np.float32), 1)
+    cov = np.where(sub, np.maximum(cov, 0.6), cov * 0.8)
+    h, w = sub.shape
+    img = np.zeros((h, w, 4), np.uint8)
+    img[..., :3] = frame[y0:y1, x0:x1, :3]
+    img[..., 3] = np.clip(cov * 255, 0, 255).astype(np.uint8)
+    patch = np.zeros((h, w, 4), np.uint8)
+    if fill:
+        hole = dilate(sub, 3)
+        alpha = box_blur(dilate(hole, 1).astype(np.float32), 1)
+        patch[..., :3] = fill_hole(frame, hole, int(x0), int(y0))
+        patch[..., 3] = np.clip(alpha * 255, 0, 255).astype(np.uint8)
+    return Cutout(int(x0), int(y0), img, patch), poly

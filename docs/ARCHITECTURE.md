@@ -19,7 +19,8 @@ fc27studio/
     undo.py             command-based undo stack with merging and macros
     document.py         Project + undo stack + every editing operation
     storage.py          .fc27studio I/O, .bak backups, autosave/recovery, video relinking
-    imaging.py          PNG codec, polygon masks, player cut-outs and background fill (numpy)
+    imaging.py          PNG codec, polygon masks, mask→outline tracing, cut-outs, background fill
+    segment.py          AI player selection (MobileSAM via ONNX Runtime)
   ui/
     main_window.py      window, workspaces, menus/actions, file handling, exports, autosave
     canvas.py           video display + drawing/editing interaction
@@ -99,6 +100,22 @@ UI thread ── hover/bookmark thumbs ─▶ ThumbnailWorker thread (own VideoS
    rectangle through the same transform (`Annotation.source_transform`), so the cut-out and its handles
    always agree.
 
+## AI player selection (`core/segment.py`)
+
+- Model: MobileSAM (a distilled Segment Anything), as two ONNX files (image encoder 28 MB, prompt
+  decoder 16 MB) run on the CPU with ONNX Runtime. Downloaded and SHA-256-verified at build time and
+  bundled with the app.
+- Players are small in broadcast frames, so the encoder sees a **zoomed square crop** around the click
+  (≈26% of the frame height) instead of the whole frame. Refinement clicks reuse the cached embedding
+  (≈40 ms); a click outside the crop re-crops to cover all clicks.
+- SAM proposes several masks (shirt, upper body, whole player). The **largest confident** mask that is
+  still player-sized (<20% of the crop) is chosen, which is the whole player.
+- Measured on 121 players in real broadcast frames (Voxel51 Football-Player-Segmentation, CC0) with
+  one click on the shirt: mean IoU 0.89 against hand-drawn outlines (median 0.93; 91% above 0.8),
+  0.48 s per click on 4 CPU cores. Whole-frame segmentation scored 0.75 by comparison.
+- The mask is reduced to its connected blob, holes are filled, and it is traced to an exact pixel-edge
+  outline (then simplified) for editing; the mask itself gives the cut-out's alpha.
+
 ## Before/after and boards
 
 - Every annotation has a `layer` (`both` / `before` / `after`). The canvas renders the *before* scene
@@ -136,7 +153,7 @@ images match the screen exactly. Spotlights are painted first so they darken the
 
 ## Testing
 
-`python -m pytest -q tests` (65 tests):
+`python -m pytest -q tests` (74 tests):
 
 - `test_video.py` — frame accuracy (B-frames, MPEG-4, random/backward/keyframe boundaries, frame-skipping playback), index cache, timecodes
 - `test_document.py` — undo/redo, merging, layering, grouping, bookmarks, geometry/hit tests, project I/O,
@@ -149,5 +166,9 @@ images match the screen exactly. Spotlights are painted first so they darken the
   continued), cut-out geometry, boards/scoped undo, formations, and GUI flows: lasso and click cut-outs,
   move/ghost/reset, before/after layers and compare export, board formations/colours/measure/tokens,
   duplicate/rename/delete, isolation from video drawings
+
+- `test_ai_select.py` — mask utilities (exact outline tracing, components, holes), mask cut-outs,
+  mask choice, and with the model present: selecting a player and refining it, plus click → Enter →
+  cut-out in the real window
 
 `FC27TacticalStudio.exe --selfcheck` runs a smoke test inside the packaged build (used by CI).

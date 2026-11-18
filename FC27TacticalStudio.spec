@@ -5,15 +5,24 @@ from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 
 block_cipher = None
 
-hiddenimports = collect_submodules("av")
-binaries = collect_dynamic_libs("av")
+import os
+from PyInstaller.utils.hooks import collect_data_files
+
+hiddenimports = collect_submodules("av") + collect_submodules("onnxruntime")
+binaries = collect_dynamic_libs("av") + collect_dynamic_libs("onnxruntime")
 
 datas = [
     ("fc27studio/resources", "fc27studio/resources"),
     ("docs/USER_GUIDE.md", "docs"),
     ("LICENSE", "."),
     ("docs/LICENSING.md", "docs"),
-]
+] + collect_data_files("onnxruntime")
+
+# AI player-selection model (downloaded by scripts/fetch_models.py)
+if os.path.isfile("fc27studio/models/mobile_sam_image_encoder.onnx"):
+    datas.append(("fc27studio/models", "fc27studio/models"))
+else:
+    print("WARNING: AI model not found - run scripts/fetch_models.py; building without AI selection")
 
 # Qt modules the app does not use (keeps the bundle much smaller).
 excludes = [

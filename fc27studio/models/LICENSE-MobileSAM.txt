@@ -1,0 +1,3 @@
+MobileSAM (https://github.com/ChaoningZhang/MobileSAM) - MIT License.
+ONNX export: https://huggingface.co/Acly/MobileSAM (MIT).
+Based on Segment Anything by Meta AI (Apache 2.0).

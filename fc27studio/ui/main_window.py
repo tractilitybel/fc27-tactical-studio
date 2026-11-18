@@ -206,6 +206,9 @@ class MainWindow(QMainWindow):
         vl.addWidget(self.canvas, 1)
         vl.addWidget(self.timeline)
         vl.addWidget(self.transport)
+        self._segmenter = None
+        self._segmenter_error: Optional[str] = None
+        self.canvas.segmenter_provider = self._get_segmenter
         self.board_canvas = Canvas()
         self.board_canvas.board_mode = True
         self.board_canvas.editable = True
@@ -577,6 +580,27 @@ class MainWindow(QMainWindow):
 
     def _sel_doc_ids(self) -> list[str]:
         return [a.id for a in self.cv.selected() if not self.cv.is_temp(a.id)]
+
+    def _get_segmenter(self):
+        """Load the AI player-selection model on first use (None if unavailable)."""
+        if self._segmenter is not None or self._segmenter_error is not None:
+            return self._segmenter
+        from ..core import segment
+        model_dir = segment.find_model_dir([os.path.join(app_data_dir(), "models")])
+        if model_dir is None or not segment.runtime_available():
+            self._segmenter_error = "AI model not installed"
+            self.statusBar().showMessage("AI player selection is not available in this build — "
+                                         "drag a lasso around the player instead.", 6000)
+            return None
+        try:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            self._segmenter = segment.PlayerSegmenter(model_dir)
+        except Exception as exc:
+            self._segmenter_error = str(exc)
+            self.statusBar().showMessage(f"AI player selection could not start: {exc}", 8000)
+        finally:
+            QApplication.restoreOverrideCursor()
+        return self._segmenter
 
     @property
     def cv(self) -> Canvas:

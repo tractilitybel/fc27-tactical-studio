@@ -95,6 +95,11 @@ class Canvas(QWidget):
         self.px_per_m: Optional[float] = None
         self.token_size = 22.0
         self._lasso_moved = False
+        # AI player selection (cut-out tool): provider returns a PlayerSegmenter or None
+        self.segmenter_provider: Optional[Callable[[], object]] = None
+        self._ai_sel = None
+        self._ai_overlay: Optional[QImage] = None
+        self._ai_frame = None
 
     # ================================================================ API
     def set_document(self, doc: Optional[Document]) -> None:
@@ -114,6 +119,7 @@ class Canvas(QWidget):
 
     def set_frame(self, frame: int) -> None:
         if frame != self.frame:
+            self.cancel_ai_selection()
             self.frame = frame
             # Drop selection of drawings that are no longer visible.
             vis = {a.id for a in self.visible_annotations()}
@@ -124,6 +130,7 @@ class Canvas(QWidget):
 
     def set_tool(self, tool: str) -> None:
         self._finish_zone(commit=True)
+        self.cancel_ai_selection()
         self.tool = tool
         self.setCursor(Qt.ArrowCursor if tool == "select" else Qt.CrossCursor)
         self.toolChanged.emit(tool)
@@ -293,6 +300,8 @@ class Canvas(QWidget):
                     pen = QPen(QColor(d.color), d.width / 2, Qt.DashLine)
                     p.setPen(pen)
                     p.drawLine(QPointF(*d.points[-1]), self._hover_v)
+        if self._ai_sel is not None:
+            self._paint_ai_selection(p)
         p.setClipping(False)
         p.resetTransform()
         if self.compare == "split":
@@ -304,6 +313,19 @@ class Canvas(QWidget):
             p.setPen(QPen(QColor(90, 170, 255), 1, Qt.DashLine))
             p.setBrush(QColor(90, 170, 255, 40))
             p.drawRect(r.normalized())
+
+    def _paint_ai_selection(self, p: QPainter) -> None:
+        """Painted in video coordinates: tinted mask + include/exclude markers."""
+        sel = self._ai_sel
+        if self._ai_overlay is not None:
+            x, y, w, h = sel.crop
+            p.drawImage(QRectF(x, y, w, h), self._ai_overlay)
+        r = 5 / max(self.scale_factor(), 0.01)
+        for px, py, label in sel.points:
+            col = QColor(60, 220, 90) if label else QColor(240, 70, 70)
+            p.setPen(QPen(QColor(255, 255, 255), r * 0.35))
+            p.setBrush(col)
+            p.drawEllipse(QPointF(px, py), r, r)
 
     def _paint_scene(self, p: QPainter, t: QTransform, frame_rect: QRectF, side: str) -> None:
         p.save()
@@ -485,6 +507,9 @@ class Canvas(QWidget):
             return
         if self.compare == "side":
             return  # side-by-side is view-only
+        if self._ai_sel is not None and ev.button() in (Qt.LeftButton, Qt.RightButton):
+            self._ai_refine(v, include=ev.button() == Qt.LeftButton)
+            return
         if ev.button() == Qt.RightButton:
             self._context_menu(ev)
             return
@@ -588,6 +613,14 @@ class Canvas(QWidget):
             self._drag = None
             if self._lasso_moved and len(self._drawing.points) >= 6:
                 self._finish_zone(commit=True)  # lasso traced in one drag
+            elif not self._lasso_moved and len(self._drawing.points) == 1:
+                seg = self.segmenter_provider() if self.segmenter_provider else None
+                if seg is not None:
+                    x, y = self._drawing.points[0]
+                    self._drawing = None
+                    self._ai_start(seg, x, y)
+                    return
+                self.statusMessage.emit("Click around the player and press Enter, or drag a lasso.")
             self.update()
             return
         if self._drag == "pan":
@@ -618,6 +651,9 @@ class Canvas(QWidget):
         self.update()
 
     def mouseDoubleClickEvent(self, ev: QMouseEvent) -> None:
+        if self._ai_sel is not None:
+            self.confirm_ai_selection()
+            return
         if self._drawing is not None and self._drawing.kind in POLY_TOOLS:
             self._finish_zone(commit=True)
             return
@@ -745,6 +781,89 @@ class Canvas(QWidget):
             a.width = max(3.0, st.width * 0.6)
         return a
 
+    # ------------------------------------------------------------ AI selection
+    def has_ai_selection(self) -> bool:
+        return self._ai_sel is not None
+
+    def _ai_start(self, seg, x: float, y: float) -> None:
+        if self.image is None:
+            return
+        self.setCursor(Qt.WaitCursor)
+        try:
+            self._ai_frame = self._image_array()
+            self._ai_seg = seg
+            self._ai_sel = seg.start(self._ai_frame, x, y, frame_key=self.frame)
+        except Exception as exc:  # model failure must never lose work
+            self._ai_sel = None
+            self.statusMessage.emit(f"AI selection failed ({exc}); drag a lasso instead.")
+            return
+        finally:
+            self.setCursor(Qt.CrossCursor)
+        self._update_ai_overlay()
+        self.statusMessage.emit("Player selected. Left-click adds a missed part, right-click removes a wrong "
+                                "part. Enter or double-click to cut out, Esc to cancel.")
+
+    def _ai_refine(self, v: QPointF, include: bool) -> None:
+        self.setCursor(Qt.WaitCursor)
+        try:
+            self._ai_sel = self._ai_seg.refine(self._ai_frame, self._ai_sel, v.x(), v.y(), include,
+                                               frame_key=self.frame)
+        except Exception as exc:
+            self.statusMessage.emit(f"AI refinement failed: {exc}")
+        finally:
+            self.setCursor(Qt.CrossCursor)
+        self._update_ai_overlay()
+
+    def _update_ai_overlay(self) -> None:
+        sel = self._ai_sel
+        if sel is None or sel.mask is None:
+            self._ai_overlay = None
+        else:
+            import numpy as np
+            m = sel.mask
+            h, w = m.shape
+            rgba = np.zeros((h, w, 4), np.uint8)
+            rgba[m] = (40, 200, 255, 120)
+            # Bright 1-px edge so the outline is easy to judge.
+            edge = m & ~(np.roll(m, 1, 0) & np.roll(m, -1, 0) & np.roll(m, 1, 1) & np.roll(m, -1, 1))
+            rgba[edge] = (255, 255, 255, 255)
+            self._ai_overlay = QImage(rgba.data, w, h, w * 4, QImage.Format_RGBA8888).copy()
+        self.update()
+
+    def cancel_ai_selection(self) -> None:
+        if self._ai_sel is not None:
+            self._ai_sel = None
+            self._ai_overlay = None
+            self._ai_frame = None
+            self.update()
+
+    def confirm_ai_selection(self) -> Optional[Annotation]:
+        sel = self._ai_sel
+        if sel is None:
+            return None
+        from ..core.imaging import encode_png, make_cutout_from_mask, to_b64
+        full = self._ai_seg.full_mask(self._ai_frame.shape, sel)
+        first = sel.points[0]
+        res = make_cutout_from_mask(self._ai_frame, full, seed=(first[0], first[1]))
+        self.cancel_ai_selection()
+        if res is None:
+            self.statusMessage.emit("Nothing selected — click on the player's body.")
+            return None
+        cut, poly = res
+        a = self._new_annotation(Kind.CUTOUT, poly)
+        a.source_points = list(poly)
+        a.crop = [cut.x, cut.y, int(cut.image.shape[1]), int(cut.image.shape[0])]
+        a.image = to_b64(encode_png(cut.image))
+        a.fill_image = to_b64(encode_png(cut.fill))
+        a.layer = "after"
+        a.width = 3.0
+        a.fill_opacity = 0.0
+        self._commit_new(a)
+        self.set_tool("select")
+        self.set_selection({a.id})
+        self.statusMessage.emit("Player cut out — drag them to where they should be.")
+        return a
+
     def next_token_number(self, color: str) -> str:
         used = {a.text for a in (self.doc.annotations if self.doc else [])
                 if a.kind == Kind.TOKEN and a.color.lower() == color.lower()}
@@ -806,7 +925,7 @@ class Canvas(QWidget):
             self._drawing.width = 3.0
             self._lasso_moved = False
             self._drag = "cutline"
-            self.statusMessage.emit("Trace around the player (drag), or click points and press Enter.")
+            self.statusMessage.emit("Click the player for AI selection, or drag a lasso around them.")
             self.update()
             return
         if self.tool in POLY_TOOLS:
@@ -915,6 +1034,14 @@ class Canvas(QWidget):
     # ================================================================= keys
     def keyPressEvent(self, ev: QKeyEvent) -> None:
         k = ev.key()
+        if self._ai_sel is not None:
+            if k in (Qt.Key_Return, Qt.Key_Enter):
+                self.confirm_ai_selection()
+                return
+            if k == Qt.Key_Escape:
+                self.cancel_ai_selection()
+                self.statusMessage.emit("Selection cancelled.")
+                return
         if self._drawing is not None and self._drawing.kind in POLY_TOOLS:
             if k in (Qt.Key_Return, Qt.Key_Enter):
                 self._finish_zone(commit=True)

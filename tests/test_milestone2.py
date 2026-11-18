@@ -209,6 +209,7 @@ def test_cutout_lasso_move_ghost_and_reset(qapp, win):
 def test_cutout_by_clicking_points(qapp, win):
     win.choose_tool(Kind.CUTOUT)
     cv = win.canvas
+    cv.segmenter_provider = lambda: None   # without the AI model, clicks place outline points
     for p in ((60, 50), (110, 50), (110, 130), (60, 130)):
         QTest.mouseClick(cv, Qt.LeftButton, Qt.NoModifier, cv.to_widget(QPointF(*p)).toPoint())
     QTest.keyClick(cv, Qt.Key_Return)

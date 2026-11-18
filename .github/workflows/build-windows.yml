@@ -24,6 +24,9 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements-dev.txt
 
+      - name: Download AI model
+        run: python scripts/fetch_models.py
+
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
@@ -42,6 +45,7 @@ jobs:
                -ArgumentList "--selfcheck","--selfcheck-log",$log -Wait -PassThru
           Get-Content $log
           if ($p.ExitCode -ne 0) { throw "selfcheck failed with exit code $($p.ExitCode)" }
+          if (-not (Select-String -Path $log -Pattern "AI ok" -Quiet)) { throw "AI player selection missing from the build" }
 
       - name: Zip
         shell: pwsh
