@@ -66,6 +66,24 @@ QToolTip { background: #1d2128; color: #dfe4ea; border: 1px solid #3a424f; }
 """
 
 
+def stylesheet() -> str:
+    """Dark theme plus spin-box arrows (Qt hides the default ones once a spin box is styled)."""
+    res = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources").replace("\\", "/")
+    return DARK_QSS + f"""
+QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {{ subcontrol-origin: border; width: 16px;
+    background: #1d2128; border-left: 1px solid #343b47; }}
+QAbstractSpinBox::up-button {{ subcontrol-position: top right; border-top-right-radius: 4px; }}
+QAbstractSpinBox::down-button {{ subcontrol-position: bottom right; border-bottom-right-radius: 4px; }}
+QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {{ background: #2b5f99; }}
+QAbstractSpinBox::up-arrow {{ image: url({res}/arrow_up.png); width: 8px; height: 8px; }}
+QAbstractSpinBox::down-arrow {{ image: url({res}/arrow_down.png); width: 8px; height: 8px; }}
+QAbstractSpinBox::up-arrow:disabled {{ image: url({res}/arrow_up_disabled.png); }}
+QAbstractSpinBox::down-arrow:disabled {{ image: url({res}/arrow_down_disabled.png); }}
+QSpinBox#frameBox::up-button, QSpinBox#frameBox::down-button {{ width: 0px; border: none; }}
+QSpinBox#frameBox::up-arrow, QSpinBox#frameBox::down-arrow {{ image: none; width: 0px; }}
+"""
+
+
 def _log_dir() -> str:
     from .ui.settings import app_data_dir
     d = os.path.join(app_data_dir(), "logs")
@@ -152,7 +170,7 @@ def main(argv=None) -> int:
     app.setOrganizationName("FC27TacticalStudio")
     app.setApplicationVersion(__version__)
     app.setStyle("Fusion")
-    app.setStyleSheet(DARK_QSS)
+    app.setStyleSheet(stylesheet())
     icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "icon.png")
     if os.path.isfile(icon_path):
         app.setWindowIcon(QIcon(icon_path))

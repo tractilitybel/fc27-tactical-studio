@@ -373,7 +373,9 @@ class Transport(QWidget):
         self.frame_spin.setRange(0, 0)
         self.frame_spin.setKeyboardTracking(False)
         self.frame_spin.setMinimumWidth(90)
-        self.frame_spin.setToolTip("Exact frame number — type a value and press Enter")
+        self.frame_spin.setObjectName("frameBox")  # arrow buttons hidden via the stylesheet
+        self.frame_spin.setToolTip("Exact frame number of the picture on screen.\n"
+                                   "Type a number and press Enter to jump to it.")
         self.frame_spin.valueChanged.connect(self._frame_typed)
         lay.addWidget(self.frame_spin)
         lay.addStretch(1)
