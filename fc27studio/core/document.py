@@ -8,17 +8,34 @@ from __future__ import annotations
 import copy
 from typing import Callable, Iterable, Optional
 
-from .model import Annotation, Bookmark, Project, new_id
+from .model import Annotation, Board, Bookmark, Project, new_id
 from .undo import Command, UndoStack
 
 
 class Document:
+    ANN_EVENT = "annotations"
+
     def __init__(self, project: Optional[Project] = None, path: Optional[str] = None):
         self.project = project or Project()
         self.path = path
         self.undo = UndoStack()
-        self.listeners: list[Callable[[str], None]] = []  # arg: "annotations"/"bookmarks"/"project"
+        self.listeners: list[Callable[[str], None]] = []  # "annotations"/"bookmarks"/"project"/"boards"/"board"
         self._dirty_extra = False
+
+    # ------------------------------------------------- annotation scope
+    @property
+    def annotations(self) -> list[Annotation]:
+        """The annotation list this document edits (video drawings here)."""
+        return self.project.annotations
+
+    def annotations_at(self, frame: int) -> list[Annotation]:
+        return self.project.annotations_at(frame)
+
+    def find_annotation(self, aid: str) -> Optional[Annotation]:
+        for a in self.annotations:
+            if a.id == aid:
+                return a
+        return None
 
     # ---------------------------------------------------------------- state
     @property
@@ -52,10 +69,10 @@ class Document:
         anns = list(anns)
         if not anns:
             return
-        base = self.project.next_z()
+        lst = self.annotations
+        base = max((a.z for a in lst), default=0) + 1
         for i, a in enumerate(anns):
             a.z = base + i
-        lst = self.project.annotations
 
         def redo():
             lst.extend(anns)
@@ -63,14 +80,14 @@ class Document:
         def undo():
             ids = {a.id for a in anns}
             lst[:] = [a for a in lst if a.id not in ids]
-        self._cmd(label, redo, undo, "annotations")
+        self._cmd(label, redo, undo, self.ANN_EVENT)
 
     def add_annotation(self, ann: Annotation) -> None:
         self.add_annotations([ann], f"Add {ann.kind.replace('_', ' ')}")
 
     def remove_annotations(self, ids: Iterable[str]) -> None:
         ids = set(ids)
-        lst = self.project.annotations
+        lst = self.annotations
         removed = [(i, a) for i, a in enumerate(lst) if a.id in ids]
         if not removed:
             return
@@ -82,13 +99,13 @@ class Document:
             for i, a in removed:
                 lst.insert(i, a)
         self._cmd("Delete drawing" if len(removed) == 1 else f"Delete {len(removed)} drawings",
-                  redo, undo, "annotations")
+                  redo, undo, self.ANN_EVENT)
 
     def modify_annotations(self, ids: Iterable[str], fn: Callable[[Annotation], None],
                            label: str = "Edit drawing", merge_key: Optional[str] = None) -> None:
         """Apply *fn* to each annotation; undo restores the previous state."""
         ids = set(ids)
-        targets = [a for a in self.project.annotations if a.id in ids]
+        targets = [a for a in self.annotations if a.id in ids]
         if not targets:
             return
         before = {a.id: copy.deepcopy(a.__dict__) for a in targets}
@@ -105,10 +122,10 @@ class Document:
         self._replace_states(before, after, label, None, already_applied=True)
 
     def _replace_states(self, before, after, label, merge_key, already_applied=False):
-        proj = self.project
+        lst = self.annotations
 
         def apply(states):
-            for a in proj.annotations:
+            for a in lst:
                 st = states.get(a.id)
                 if st is not None:
                     a.__dict__.update(copy.deepcopy(st))
@@ -116,25 +133,25 @@ class Document:
         if already_applied:
             def r():
                 apply(after)
-                self._emit("annotations")
+                self._emit(self.ANN_EVENT)
 
             def u():
                 apply(before)
-                self._emit("annotations")
+                self._emit(self.ANN_EVENT)
             self.undo.push(Command(label, r, u, merge_key), already_done=True)
-            self._emit("annotations")
+            self._emit(self.ANN_EVENT)
         else:
-            self._cmd(label, lambda: apply(after), lambda: apply(before), "annotations", merge_key)
+            self._cmd(label, lambda: apply(after), lambda: apply(before), self.ANN_EVENT, merge_key)
 
     def snapshot(self, ids: Iterable[str]) -> dict:
         ids = set(ids)
-        return {a.id: copy.deepcopy(a.__dict__) for a in self.project.annotations if a.id in ids}
+        return {a.id: copy.deepcopy(a.__dict__) for a in self.annotations if a.id in ids}
 
     # ------------------------------------------------------------- layering
     def reorder(self, ids: Iterable[str], mode: str) -> None:
         """mode: 'front', 'back', 'forward', 'backward'."""
         ids = set(ids)
-        order = sorted(self.project.annotations, key=lambda a: a.z)
+        order = sorted(self.annotations, key=lambda a: a.z)
         sel = [a for a in order if a.id in ids]
         rest = [a for a in order if a.id not in ids]
         if not sel:
@@ -155,13 +172,13 @@ class Document:
         self._replace_states_partial(before, after, "Change layer order")
 
     def _replace_states_partial(self, before, after, label):
-        proj = self.project
+        lst = self.annotations
 
         def apply(states):
-            for a in proj.annotations:
+            for a in lst:
                 if a.id in states:
                     a.__dict__.update(states[a.id])
-        self._cmd(label, lambda: apply(after), lambda: apply(before), "annotations")
+        self._cmd(label, lambda: apply(after), lambda: apply(before), self.ANN_EVENT)
 
     def group(self, ids: Iterable[str]) -> Optional[str]:
         ids = list(ids)
@@ -176,9 +193,9 @@ class Document:
 
     def expand_groups(self, ids: Iterable[str]) -> set[str]:
         ids = set(ids)
-        groups = {a.group_id for a in self.project.annotations if a.id in ids and a.group_id}
+        groups = {a.group_id for a in self.annotations if a.id in ids and a.group_id}
         if groups:
-            ids |= {a.id for a in self.project.annotations if a.group_id in groups}
+            ids |= {a.id for a in self.annotations if a.group_id in groups}
         return ids
 
     # ------------------------------------------------------------ bookmarks
@@ -234,3 +251,66 @@ class Document:
             for k, v in st.items():
                 setattr(proj, k, copy.deepcopy(v))
         self._cmd(label, lambda: apply(after), lambda: apply(before), "project")
+
+    # ---------------------------------------------------------------- boards
+    def add_board(self, board: Board, index: Optional[int] = None) -> None:
+        lst = self.project.boards
+        pos = len(lst) if index is None else index
+        self._cmd("Add board", lambda: lst.insert(pos, board),
+                  lambda: lst.remove(board) if board in lst else None, "boards")
+
+    def remove_board(self, bid: str) -> None:
+        lst = self.project.boards
+        b = self.project.board(bid)
+        if b is None:
+            return
+        pos = lst.index(b)
+        self._cmd("Delete board", lambda: lst.remove(b), lambda: lst.insert(pos, b), "boards")
+
+    def update_board(self, bid: str, label: str = "Edit board", **changes) -> None:
+        b = self.project.board(bid)
+        if b is None:
+            return
+        before = {k: copy.deepcopy(getattr(b, k)) for k in changes}
+        if all(before[k] == v for k, v in changes.items()):
+            return
+        after = copy.deepcopy(changes)
+
+        def apply(st):
+            for k, v in st.items():
+                setattr(b, k, copy.deepcopy(v))
+        self._cmd(label, lambda: apply(after), lambda: apply(before), "boards")
+
+
+class ScopedDocument(Document):
+    """Edits the drawings of one tactics board while sharing the parent
+    document's project, undo stack, listeners and dirty state."""
+    ANN_EVENT = "board"
+
+    def __init__(self, parent: Document, board: Board):
+        self.parent = parent
+        self.board = board
+        self.project = parent.project
+        self.undo = parent.undo
+        self.listeners = parent.listeners
+
+    @property
+    def path(self):
+        return self.parent.path
+
+    @property
+    def annotations(self) -> list[Annotation]:
+        return self.board.annotations
+
+    def annotations_at(self, frame: int) -> list[Annotation]:
+        return sorted((a for a in self.board.annotations if a.visible), key=lambda a: a.z)
+
+    @property
+    def dirty(self) -> bool:
+        return self.parent.dirty
+
+    def mark_dirty(self) -> None:
+        self.parent.mark_dirty()
+
+    def mark_clean(self) -> None:
+        self.parent.mark_clean()

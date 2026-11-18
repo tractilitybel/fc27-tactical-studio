@@ -324,7 +324,7 @@ class LayersList(QListWidget):
         self.clear()
         anns = []
         if self.canvas.doc:
-            anns = [a for a in self.canvas.doc.project.annotations
+            anns = [a for a in self.canvas.doc.annotations
                     if a.start_frame <= self.canvas.frame <= a.end_frame]
         anns += self.canvas.temp
         for a in sorted(anns, key=lambda a: -a.z):

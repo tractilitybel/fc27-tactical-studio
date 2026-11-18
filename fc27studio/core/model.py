@@ -26,13 +26,28 @@ class Kind:
     ZONE = "zone"            # filled polygon
     TEXT = "text"
     SPOTLIGHT = "spotlight"  # darkens everything except an ellipse
+    CUTOUT = "cutout"        # a player lifted out of the frame and moved
+    TOKEN = "token"          # numbered player disc (tactics board)
+    BALL = "ball"
+    MEASURE = "measure"      # distance line (metres on the board)
 
     ALL = [ARROW, CURVED_ARROW, RUN, LINE, FREEHAND, CIRCLE, RECT, ZONE, TEXT, SPOTLIGHT]
+    VIDEO_TOOLS = ALL + [CUTOUT]
+    BOARD_TOOLS = [TOKEN, BALL, ARROW, CURVED_ARROW, RUN, LINE, FREEHAND, CIRCLE, RECT, ZONE,
+                   TEXT, MEASURE]
+    EVERY = ALL + [CUTOUT, TOKEN, BALL, MEASURE]
     LABELS = {
         ARROW: "Arrow", CURVED_ARROW: "Curved Arrow", RUN: "Run (dashed)",
         LINE: "Line", FREEHAND: "Freehand", CIRCLE: "Circle", RECT: "Rectangle",
-        ZONE: "Zone", TEXT: "Text", SPOTLIGHT: "Spotlight",
+        ZONE: "Zone", TEXT: "Text", SPOTLIGHT: "Spotlight", CUTOUT: "Player cut-out",
+        TOKEN: "Player token", BALL: "Ball", MEASURE: "Measure distance",
     }
+
+
+class Layer:
+    BOTH = "both"
+    BEFORE = "before"
+    AFTER = "after"
 
 
 @dataclass
@@ -54,12 +69,24 @@ class Annotation:
     visible: bool = True
     locked: bool = False
     name: str = ""
+    layer: str = "both"                  # before/after comparison: both | before | after
+    # Player cut-outs
+    image: str = ""                      # base64 PNG (RGBA) of the player
+    fill_image: str = ""                 # base64 PNG (RGBA) hiding the player at its origin
+    crop: list = field(default_factory=list)            # [x, y, w, h] of both images in the frame
+    source_points: list = field(default_factory=list)   # outline at the original position
+    ghost_opacity: float = 0.35          # 0 = original removed, 1 = original left untouched
+    show_link: bool = True               # dashed outline + arrow from original to new position
 
     # ---------------------------------------------------------------- geometry
     def bbox(self) -> tuple[float, float, float, float]:
         xs = [p[0] for p in self.points] or [0.0]
         ys = [p[1] for p in self.points] or [0.0]
         x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
+        if self.kind in (Kind.TOKEN, Kind.BALL) and self.points:
+            r = self.token_radius()
+            cx, cy = self.points[0]
+            return cx - r, cy - r, cx + r, cy + r
         if self.kind == Kind.TEXT:
             # Approximate text extent (renderer refines it).
             lines = (self.text or " ").split("\n")
@@ -67,6 +94,9 @@ class Annotation:
             h = len(lines) * self.font_size * 1.3
             x1, y1 = x0 + max(w, 10), y0 + max(h, 10)
         return x0, y0, x1, y1
+
+    def token_radius(self) -> float:
+        return max(4.0, self.font_size * (0.32 if self.kind == Kind.BALL else 0.75))
 
     def center(self) -> Point:
         x0, y0, x1, y1 = self.bbox()
@@ -78,7 +108,7 @@ class Annotation:
     def scale(self, sx: float, sy: float, anchor: Point) -> None:
         ax, ay = anchor
         self.points = [(ax + (x - ax) * sx, ay + (y - ay) * sy) for x, y in self.points]
-        if self.kind == Kind.TEXT:
+        if self.kind in (Kind.TEXT, Kind.TOKEN, Kind.BALL):
             self.font_size = max(6.0, self.font_size * abs(sy))
 
     def visible_at(self, frame: int) -> bool:
@@ -97,6 +127,11 @@ class Annotation:
     def hit(self, p: Point, tol: float) -> bool:
         x, y = self.to_local(p)
         x0, y0, x1, y1 = self.bbox()
+        if self.kind in (Kind.TOKEN, Kind.BALL) and self.points:
+            cx, cy = self.points[0]
+            return math.hypot(x - cx, y - cy) <= self.token_radius() + tol
+        if self.kind == Kind.CUTOUT and len(self.points) >= 3:
+            return point_in_polygon((x, y), self.points)
         if self.kind in (Kind.TEXT, Kind.RECT, Kind.SPOTLIGHT, Kind.ZONE, Kind.CIRCLE):
             if self.kind == Kind.CIRCLE or self.kind == Kind.SPOTLIGHT:
                 cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
@@ -118,15 +153,32 @@ class Annotation:
             a.id = new_id()
         return a
 
+    def source_transform(self) -> tuple[float, float, float, float]:
+        """Cut-outs: (scale_x, scale_y, dx, dy) mapping original → current position."""
+        if not self.source_points or len(self.source_points) != len(self.points):
+            return 1.0, 1.0, 0.0, 0.0
+        sx0 = min(p[0] for p in self.source_points)
+        sy0 = min(p[1] for p in self.source_points)
+        sw = max(p[0] for p in self.source_points) - sx0 or 1.0
+        sh = max(p[1] for p in self.source_points) - sy0 or 1.0
+        x0, y0, x1, y1 = self.bbox()
+        kx, ky = (x1 - x0) / sw, (y1 - y0) / sh
+        return kx, ky, x0 - sx0 * kx, y0 - sy0 * ky
+
     def to_dict(self) -> dict:
         d = asdict(self)
         d["points"] = [list(p) for p in self.points]
+        d["source_points"] = [list(p) for p in self.source_points]
+        if self.kind != Kind.CUTOUT:  # keep files small and readable
+            for k in ("image", "fill_image", "crop", "source_points", "ghost_opacity", "show_link"):
+                d.pop(k, None)
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Annotation":
         d = dict(d)
         d["points"] = [tuple(p) for p in d.get("points", [])]
+        d["source_points"] = [tuple(p) for p in d.get("source_points", [])]
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in known})
 
@@ -218,6 +270,30 @@ class Bookmark:
 
 
 @dataclass
+class Board:
+    """A 2D tactics board: top-down pitch with tokens and drawings."""
+    name: str = "Board"
+    annotations: list[Annotation] = field(default_factory=list)
+    linked_frame: Optional[int] = None   # video moment this board explains
+    home_color: str = "#e63946"
+    away_color: str = "#3a86ff"
+    notes: str = ""
+    id: str = field(default_factory=new_id)
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "id": self.id, "linked_frame": self.linked_frame,
+                "home_color": self.home_color, "away_color": self.away_color, "notes": self.notes,
+                "annotations": [a.to_dict() for a in self.annotations]}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Board":
+        return cls(name=d.get("name", "Board"), id=d.get("id") or new_id(),
+                   linked_frame=d.get("linked_frame"), home_color=d.get("home_color", "#e63946"),
+                   away_color=d.get("away_color", "#3a86ff"), notes=d.get("notes", ""),
+                   annotations=[Annotation.from_dict(a) for a in d.get("annotations", [])])
+
+
+@dataclass
 class VideoRef:
     path: str = ""
     rel_path: str = ""
@@ -238,6 +314,7 @@ class Project:
     last_frame: int = 0
     loop_a: Optional[int] = None
     loop_b: Optional[int] = None
+    boards: list[Board] = field(default_factory=list)
     id: str = field(default_factory=new_id)
 
     # ---------------------------------------------------------- lookups
@@ -245,6 +322,12 @@ class Project:
         for a in self.annotations:
             if a.id == aid:
                 return a
+        return None
+
+    def board(self, bid: str) -> Optional[Board]:
+        for b in self.boards:
+            if b.id == bid:
+                return b
         return None
 
     def bookmark(self, bid: str) -> Optional[Bookmark]:
@@ -291,6 +374,7 @@ class Project:
             "last_frame": self.last_frame,
             "loop_a": self.loop_a,
             "loop_b": self.loop_b,
+            "boards": [b.to_dict() for b in self.boards],
         }
 
     @classmethod
@@ -310,4 +394,5 @@ class Project:
         p.last_frame = int(d.get("last_frame", 0))
         p.loop_a = d.get("loop_a")
         p.loop_b = d.get("loop_b")
+        p.boards = [Board.from_dict(b) for b in d.get("boards", [])]
         return p

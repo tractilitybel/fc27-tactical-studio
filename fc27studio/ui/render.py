@@ -5,13 +5,16 @@ Used by the on-screen canvas and by image export so both are identical.
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
+from typing import Optional
 from typing import Iterable
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QByteArray, QPointF, QRectF, Qt
 from PySide6.QtGui import (QBrush, QColor, QFont, QFontMetricsF, QImage, QPainter,
                            QPainterPath, QPen, QPolygonF, QTransform)
 
+from ..core.imaging import from_b64
 from ..core.model import Annotation, Kind, quad_bezier_points
 
 
@@ -48,6 +51,9 @@ def text_rect(ann: Annotation) -> QRectF:
 
 
 def precise_bbox(ann: Annotation) -> tuple[float, float, float, float]:
+    if ann.kind == Kind.CUTOUT and len(ann.crop) == 4:
+        r = cutout_target_rect(ann)
+        return r.left(), r.top(), r.right(), r.bottom()
     if ann.kind == Kind.TEXT and ann.points:
         r = text_rect(ann)
         return r.left(), r.top(), r.right(), r.bottom()
@@ -81,8 +87,18 @@ def _shorten(a: QPointF, b: QPointF, by: float) -> QPointF:
     return QPointF(b.x() - dx / L * by, b.y() - dy / L * by)
 
 
-def paint_annotation(p: QPainter, ann: Annotation, frame_rect: QRectF) -> None:
+def paint_annotation(p: QPainter, ann: Annotation, frame_rect: QRectF,
+                     px_per_m: Optional[float] = None) -> None:
     if not ann.points:
+        return
+    if ann.kind == Kind.CUTOUT:
+        _paint_cutout(p, ann)
+        return
+    if ann.kind in (Kind.TOKEN, Kind.BALL):
+        _paint_token(p, ann)
+        return
+    if ann.kind == Kind.MEASURE:
+        _paint_measure(p, ann, px_per_m)
         return
     color = qcolor(ann.color, 1.0)
     p.save()
@@ -214,9 +230,165 @@ def default_control(a: QPointF, b: QPointF) -> QPointF:
     return QPointF(mx - dy * 0.25, my + dx * 0.25)
 
 
-def paint_annotations(p: QPainter, anns: Iterable[Annotation], frame_rect: QRectF) -> None:
+def paint_annotations(p: QPainter, anns: Iterable[Annotation], frame_rect: QRectF,
+                      px_per_m: Optional[float] = None) -> None:
     for a in sorted(anns, key=paint_order):
-        paint_annotation(p, a, frame_rect)
+        paint_annotation(p, a, frame_rect, px_per_m)
+
+
+# ------------------------------------------------------------------ cut-outs
+_IMG_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
+
+
+def cached_image(b64: str) -> Optional[QImage]:
+    if not b64:
+        return None
+    key = (len(b64), hash(b64))
+    img = _IMG_CACHE.get(key)
+    if img is None:
+        img = QImage.fromData(QByteArray(from_b64(b64)), "PNG")
+        if img.isNull():
+            return None
+        _IMG_CACHE[key] = img
+        while len(_IMG_CACHE) > 200:
+            _IMG_CACHE.popitem(last=False)
+    else:
+        _IMG_CACHE.move_to_end(key)
+    return img
+
+
+def cutout_target_rect(ann: Annotation) -> QRectF:
+    x, y, w, h = ann.crop if len(ann.crop) == 4 else (0, 0, 0, 0)
+    kx, ky, dx, dy = ann.source_transform()
+    return QRectF(x * kx + dx, y * ky + dy, w * kx, h * ky)
+
+
+def _paint_cutout(p: QPainter, ann: Annotation) -> None:
+    color = qcolor(ann.color)
+    op = max(0.0, min(1.0, ann.opacity))
+    p.save()
+    if len(ann.crop) == 4:
+        x, y, w, h = ann.crop
+        fill = cached_image(ann.fill_image)
+        ghost = max(0.0, min(1.0, ann.ghost_opacity))
+        if fill is not None and ghost < 1.0:
+            # Hide the player at the original spot; ghost > 0 leaves a faded trace.
+            p.setOpacity(op * (1.0 - ghost))
+            p.drawImage(QRectF(x, y, w, h), fill)
+    moved = False
+    if ann.source_points:
+        sx = sum(q[0] for q in ann.source_points) / len(ann.source_points)
+        sy = sum(q[1] for q in ann.source_points) / len(ann.source_points)
+        c = center_of(ann)
+        moved = math.hypot(c.x() - sx, c.y() - sy) > 8
+    if ann.show_link and ann.source_points and moved:
+        p.setOpacity(op * 0.9)
+        pen = QPen(color, max(1.5, ann.width * 0.5), Qt.DashLine, Qt.RoundCap, Qt.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawPolygon(QPolygonF([QPointF(a, b) for a, b in ann.source_points]))
+        a, b = QPointF(sx, sy), center_of(ann)
+        pen = QPen(color, max(2.0, ann.width * 0.7), Qt.CustomDashLine, Qt.RoundCap)
+        pen.setDashPattern([2.2, 1.6])
+        p.setPen(pen)
+        head = max(10.0, ann.width * 3.0)
+        p.drawLine(a, _shorten(a, b, head * 0.7))
+        _arrow_head(p, b, a, head, color)
+    img = cached_image(ann.image)
+    if img is not None:
+        p.setOpacity(op)
+        if ann.rotation:
+            c = center_of(ann)
+            p.translate(c)
+            p.rotate(ann.rotation)
+            p.translate(-c)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        p.drawImage(cutout_target_rect(ann), img)
+    p.restore()
+
+
+def _contrast_text(c: QColor) -> QColor:
+    lum = 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
+    return QColor(20, 20, 20) if lum > 160 else QColor(255, 255, 255)
+
+
+def _paint_token(p: QPainter, ann: Annotation) -> None:
+    cx, cy = ann.points[0]
+    c = QPointF(cx, cy)
+    r = ann.token_radius()
+    p.save()
+    p.setOpacity(max(0.0, min(1.0, ann.opacity)))
+    if ann.kind == Kind.BALL:
+        p.setPen(QPen(QColor(20, 20, 20), max(1.0, r * 0.18)))
+        p.setBrush(QColor(250, 250, 250))
+        p.drawEllipse(c, r, r)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(30, 30, 30))
+        p.drawEllipse(c, r * 0.38, r * 0.38)
+        p.restore()
+        return
+    fill = qcolor(ann.color)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(0, 0, 0, 90))
+    p.drawEllipse(c + QPointF(r * 0.08, r * 0.12), r, r)  # soft shadow
+    p.setPen(QPen(QColor(255, 255, 255), max(1.5, r * 0.12)))
+    p.setBrush(fill)
+    p.drawEllipse(c, r, r)
+    if ann.text:
+        f = text_font(r * (1.0 if len(ann.text) <= 2 else 0.75))
+        p.setFont(f)
+        p.setPen(_contrast_text(fill))
+        p.drawText(QRectF(cx - r, cy - r, 2 * r, 2 * r), Qt.AlignCenter, ann.text)
+    if ann.name:
+        f = text_font(max(8.0, r * 0.62))
+        f.setBold(False)
+        p.setFont(f)
+        fm = QFontMetricsF(f)
+        tw = fm.horizontalAdvance(ann.name) + r * 0.5
+        th = fm.height() + 2
+        box = QRectF(cx - tw / 2, cy + r * 1.15, tw, th)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(0, 0, 0, 160))
+        p.drawRoundedRect(box, th * 0.3, th * 0.3)
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(box, Qt.AlignCenter, ann.name)
+    p.restore()
+
+
+def measure_text(ann: Annotation, px_per_m: Optional[float]) -> str:
+    (x0, y0), (x1, y1) = ann.points[0], ann.points[-1]
+    d = math.hypot(x1 - x0, y1 - y0)
+    return f"{d / px_per_m:.1f} m" if px_per_m else f"{d:.0f} px"
+
+
+def _paint_measure(p: QPainter, ann: Annotation, px_per_m: Optional[float]) -> None:
+    if len(ann.points) < 2:
+        return
+    a, b = QPointF(*ann.points[0]), QPointF(*ann.points[-1])
+    color = qcolor(ann.color)
+    w = max(1.0, ann.width * 0.6)
+    p.save()
+    p.setOpacity(max(0.0, min(1.0, ann.opacity)))
+    p.setPen(QPen(color, w, Qt.SolidLine, Qt.RoundCap))
+    p.drawLine(a, b)
+    dx, dy = b.x() - a.x(), b.y() - a.y()
+    L = math.hypot(dx, dy) or 1.0
+    nx, ny = -dy / L * w * 3, dx / L * w * 3
+    for q in (a, b):
+        p.drawLine(QPointF(q.x() - nx, q.y() - ny), QPointF(q.x() + nx, q.y() + ny))
+    label = measure_text(ann, px_per_m)
+    f = text_font(max(10.0, ann.font_size * 0.6))
+    p.setFont(f)
+    fm = QFontMetricsF(f)
+    tw, th = fm.horizontalAdvance(label) + 10, fm.height() + 4
+    mid = (a + b) / 2
+    box = QRectF(mid.x() - tw / 2, mid.y() - th / 2, tw, th)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(0, 0, 0, 180))
+    p.drawRoundedRect(box, 4, 4)
+    p.setPen(color)
+    p.drawText(box, Qt.AlignCenter, label)
+    p.restore()
 
 
 def paint_order(a: Annotation):
@@ -224,12 +396,12 @@ def paint_order(a: Annotation):
     return (a.kind != Kind.SPOTLIGHT, a.z)
 
 
-def render_frame(frame: QImage, anns: Iterable[Annotation]) -> QImage:
+def render_frame(frame: QImage, anns: Iterable[Annotation], px_per_m: Optional[float] = None) -> QImage:
     """Full-resolution composite of a frame and its annotations."""
     out = frame.convertToFormat(QImage.Format_ARGB32_Premultiplied)
     p = QPainter(out)
     p.setRenderHint(QPainter.Antialiasing)
     p.setRenderHint(QPainter.TextAntialiasing)
-    paint_annotations(p, anns, QRectF(0, 0, out.width(), out.height()))
+    paint_annotations(p, anns, QRectF(0, 0, out.width(), out.height()), px_per_m)
     p.end()
     return out.convertToFormat(QImage.Format_RGB32)

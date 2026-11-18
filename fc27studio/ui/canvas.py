@@ -22,9 +22,13 @@ from .render import center_of, default_control, paint_annotation, paint_order, p
 
 HANDLE = 5.0          # half size in screen px
 ROT_OFFSET = 26.0     # rotation handle distance above bbox (screen px)
-LINEAR = (Kind.ARROW, Kind.RUN, Kind.LINE, Kind.CURVED_ARROW)
+LINEAR = (Kind.ARROW, Kind.RUN, Kind.LINE, Kind.CURVED_ARROW, Kind.MEASURE)
 POINT_EDIT = LINEAR + (Kind.ZONE,)
-BOX_KINDS = (Kind.CIRCLE, Kind.RECT, Kind.SPOTLIGHT, Kind.TEXT, Kind.FREEHAND)
+BOX_KINDS = (Kind.CIRCLE, Kind.RECT, Kind.SPOTLIGHT, Kind.TEXT, Kind.FREEHAND, Kind.CUTOUT)
+UNIFORM_SCALE = (Kind.TEXT, Kind.CUTOUT, Kind.TOKEN, Kind.BALL)
+NO_ROTATE = (Kind.TOKEN, Kind.BALL)
+POLY_TOOLS = (Kind.ZONE, Kind.CUTOUT)
+COMPARE_MODES = ("off", "split", "side")
 
 
 @dataclass
@@ -43,6 +47,8 @@ class Canvas(QWidget):
     zoomChanged = Signal(float)
     toolChanged = Signal(str)
     annotationsEdited = Signal()
+    statusMessage = Signal(str)
+    compareChanged = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -80,6 +86,14 @@ class Canvas(QWidget):
         self._hover_v: Optional[QPointF] = None
         self._clipboard: list[Annotation] = []
         self._pan_start_center = QPointF()
+        # Before/after comparison
+        self.compare = "off"
+        self.split = 0.5
+        # Tactics board mode: drawings are not tied to frames; distances in metres
+        self.board_mode = False
+        self.px_per_m: Optional[float] = None
+        self.token_size = 22.0
+        self._lasso_moved = False
 
     # ================================================================ API
     def set_document(self, doc: Optional[Document]) -> None:
@@ -130,18 +144,40 @@ class Canvas(QWidget):
             self.update()
 
     # ------------------------------------------------------- annotation sets
-    def visible_annotations(self) -> list[Annotation]:
+    def visible_annotations(self, side: str = "after") -> list[Annotation]:
+        """Drawings on the current frame. *side* filters before/after layers."""
         out = []
         if self.doc is not None:
-            out.extend(self.doc.project.annotations_at(self.frame))
+            out.extend(self.doc.annotations_at(self.frame))
         out.extend(a for a in self.temp if a.visible)
-        return out
+        hidden = "after" if side == "before" else "before"
+        return [a for a in out if a.layer != hidden]
+
+    def set_compare(self, mode: str) -> None:
+        if mode not in COMPARE_MODES:
+            mode = "off"
+        self.compare = mode
+        if mode == "side":
+            self._finish_zone(commit=False)
+        self.compareChanged.emit(mode)
+        self.update()
+
+    def cycle_compare(self) -> None:
+        i = COMPARE_MODES.index(self.compare)
+        self.set_compare(COMPARE_MODES[(i + 1) % len(COMPARE_MODES)])
+
+    def _split_x(self) -> float:
+        r = self._frame_widget_rect()
+        return r.left() + r.width() * self.split
+
+    def _frame_widget_rect(self) -> QRectF:
+        return self.view_transform().mapRect(QRectF(0, 0, self.video_size.width(), self.video_size.height()))
 
     def find(self, aid: str) -> Optional[Annotation]:
         for a in self.temp:
             if a.id == aid:
                 return a
-        return self.doc.project.annotation(aid) if self.doc else None
+        return self.doc.find_annotation(aid) if self.doc else None
 
     def is_temp(self, aid: str) -> bool:
         return any(a.id == aid for a in self.temp)
@@ -225,22 +261,41 @@ class Canvas(QWidget):
             return
         p.setRenderHint(QPainter.SmoothPixmapTransform, self.scale_factor() < 2.0)
         p.setRenderHint(QPainter.Antialiasing)
-        p.setTransform(self.view_transform())
         frame_rect = QRectF(0, 0, self.video_size.width(), self.video_size.height())
-        p.drawImage(frame_rect, self.image)
+        if self.compare == "side":
+            self._paint_side_by_side(p, frame_rect)
+            return
+        vt = self.view_transform()
+        if self.compare == "split":
+            sx = self._split_x()
+            p.setClipRect(QRectF(0, 0, sx, self.height()))
+            self._paint_scene(p, vt, frame_rect, "before")
+            p.setClipRect(QRectF(sx, 0, self.width() - sx, self.height()))
+        self._paint_scene(p, vt, frame_rect, "after")
+        p.setClipping(False)
+        p.setTransform(vt)
         p.setClipRect(frame_rect)
-        if self.show_drawings:
-            for a in sorted(self.visible_annotations(), key=paint_order):
-                paint_annotation(p, a, frame_rect)
         if self._drawing is not None:
-            paint_annotation(p, self._drawing, frame_rect)
-            if self._drawing.kind == Kind.ZONE and self._hover_v is not None and self._drawing.points:
-                pen = QPen(QColor(self._drawing.color), self._drawing.width / 2, Qt.DashLine)
+            d = self._drawing
+            if d.kind == Kind.CUTOUT:
+                pen = QPen(QColor(255, 255, 255), 2 / max(self.scale_factor(), 0.01), Qt.DashLine)
                 p.setPen(pen)
-                last = QPointF(*self._drawing.points[-1])
-                p.drawLine(last, self._hover_v)
+                p.setBrush(QColor(255, 255, 255, 40))
+                from PySide6.QtGui import QPolygonF
+                poly = QPolygonF([QPointF(*q) for q in d.points])
+                if self._hover_v is not None and not self._lasso_moved:
+                    poly.append(self._hover_v)
+                p.drawPolygon(poly)
+            else:
+                paint_annotation(p, d, frame_rect, self.px_per_m)
+                if d.kind == Kind.ZONE and self._hover_v is not None and d.points:
+                    pen = QPen(QColor(d.color), d.width / 2, Qt.DashLine)
+                    p.setPen(pen)
+                    p.drawLine(QPointF(*d.points[-1]), self._hover_v)
         p.setClipping(False)
         p.resetTransform()
+        if self.compare == "split":
+            self._paint_divider(p)
         if self.editable or self.selection:
             self._paint_selection(p)
         if self._rubber is not None:
@@ -248,6 +303,63 @@ class Canvas(QWidget):
             p.setPen(QPen(QColor(90, 170, 255), 1, Qt.DashLine))
             p.setBrush(QColor(90, 170, 255, 40))
             p.drawRect(r.normalized())
+
+    def _paint_scene(self, p: QPainter, t: QTransform, frame_rect: QRectF, side: str) -> None:
+        p.save()
+        p.setTransform(t)
+        p.drawImage(frame_rect, self.image)
+        p.setClipRect(frame_rect, Qt.IntersectClip)
+        if self.show_drawings:
+            for a in sorted(self.visible_annotations(side), key=paint_order):
+                paint_annotation(p, a, frame_rect, self.px_per_m)
+        p.restore()
+
+    def _side_transforms(self) -> tuple[QTransform, QTransform]:
+        vw, vh = max(1, self.video_size.width()), max(1, self.video_size.height())
+        gap = 8
+        half = (self.width() - gap) / 2
+        s = min(half / vw, (self.height() - 30) / vh)
+        oy = (self.height() - vh * s) / 2
+        left = QTransform(s, 0, 0, s, (half - vw * s) / 2, oy)
+        right = QTransform(s, 0, 0, s, half + gap + (half - vw * s) / 2, oy)
+        return left, right
+
+    def _paint_side_by_side(self, p: QPainter, frame_rect: QRectF) -> None:
+        lt, rt = self._side_transforms()
+        self._paint_scene(p, lt, frame_rect, "before")
+        self._paint_scene(p, rt, frame_rect, "after")
+        for t, label in ((lt, "BEFORE"), (rt, "AFTER")):
+            self._paint_label(p, t.mapRect(frame_rect).topLeft() + QPointF(10, 10), label)
+
+    def _paint_label(self, p: QPainter, at: QPointF, label: str) -> None:
+        f = QFont(self.font())
+        f.setPointSize(10)
+        f.setBold(True)
+        p.setFont(f)
+        r = QRectF(at, QSize(78, 24))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(0, 0, 0, 170))
+        p.drawRoundedRect(r, 4, 4)
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(r, Qt.AlignCenter, label)
+
+    def _paint_divider(self, p: QPainter) -> None:
+        fr = self._frame_widget_rect()
+        x = self._split_x()
+        p.setPen(QPen(QColor(255, 255, 255), 2))
+        p.drawLine(QPointF(x, fr.top()), QPointF(x, fr.bottom()))
+        c = QPointF(x, fr.center().y())
+        p.setBrush(QColor(255, 255, 255))
+        p.setPen(QPen(QColor(20, 24, 30), 1))
+        p.drawEllipse(c, 12, 12)
+        p.setPen(QPen(QColor(20, 24, 30), 2))
+        p.drawLine(c + QPointF(-6, 0), c + QPointF(-2, -4))
+        p.drawLine(c + QPointF(-6, 0), c + QPointF(-2, 4))
+        p.drawLine(c + QPointF(6, 0), c + QPointF(2, -4))
+        p.drawLine(c + QPointF(6, 0), c + QPointF(2, 4))
+        top = fr.top() + 10
+        self._paint_label(p, QPointF(max(fr.left() + 10, x - 88), top), "BEFORE")
+        self._paint_label(p, QPointF(min(fr.right() - 88, x + 10), top), "AFTER")
 
     def _paint_selection(self, p: QPainter) -> None:
         sel = self.selected()
@@ -319,11 +431,12 @@ class Canvas(QWidget):
             rect = QRectF(x0, y0, x1 - x0, y1 - y0)
             for i, pt in enumerate(_box_points(rect)):
                 out.append((f"h:{i}", m.map(pt)))
-            top = m.map(QPointF(rect.center().x(), rect.top()))
-            ctr = m.map(rect.center())
-            d = top - ctr
-            L = math.hypot(d.x(), d.y()) or 1.0
-            out.append(("rot", top + d / L * ROT_OFFSET))
+            if a.kind not in NO_ROTATE:
+                top = m.map(QPointF(rect.center().x(), rect.top()))
+                ctr = m.map(rect.center())
+                d = top - ctr
+                L = math.hypot(d.x(), d.y()) or 1.0
+                out.append(("rot", top + d / L * ROT_OFFSET))
             return out
         rect = self._group_bbox(sel)
         vt = self.view_transform()
@@ -362,6 +475,12 @@ class Canvas(QWidget):
             return
         if self.image is None:
             return
+        if ev.button() == Qt.LeftButton and self.compare == "split" and abs(pos.x() - self._split_x()) <= 10:
+            self._drag = "divider"
+            self.setCursor(Qt.SplitHCursor)
+            return
+        if self.compare == "side":
+            return  # side-by-side is view-only
         if ev.button() == Qt.RightButton:
             self._context_menu(ev)
             return
@@ -410,10 +529,26 @@ class Canvas(QWidget):
             self.center = self._pan_start_center - d
             self.update()
             return
+        if self._drag == "divider":
+            fr = self._frame_widget_rect()
+            self.split = max(0.0, min(1.0, (pos.x() - fr.left()) / max(1.0, fr.width())))
+            self.update()
+            return
         if self._drag is None:
-            self._update_hover_cursor(pos)
-            if self._drawing is not None and self._drawing.kind == Kind.ZONE:
+            if self.compare == "split" and abs(pos.x() - self._split_x()) <= 10:
+                self.setCursor(Qt.SplitHCursor)
+            else:
+                self._update_hover_cursor(pos)
+            if self._drawing is not None and self._drawing.kind in POLY_TOOLS:
                 self.update()
+            return
+        if self._drag == "cutline":
+            a = self._drawing
+            last = a.points[-1]
+            if math.hypot(v.x() - last[0], v.y() - last[1]) * self.scale_factor() >= 3:
+                a.points.append((v.x(), v.y()))
+                self._lasso_moved = True
+            self.update()
             return
         if self._drag == "draw":
             self._update_draw(v, ev.modifiers())
@@ -441,6 +576,16 @@ class Canvas(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, ev: QMouseEvent) -> None:
+        if self._drag == "divider":
+            self._drag = None
+            self.setCursor(Qt.ArrowCursor if self.tool == "select" else Qt.CrossCursor)
+            return
+        if self._drag == "cutline":
+            self._drag = None
+            if self._lasso_moved and len(self._drawing.points) >= 6:
+                self._finish_zone(commit=True)  # lasso traced in one drag
+            self.update()
+            return
         if self._drag == "pan":
             self._drag = None
             self.setCursor(Qt.ArrowCursor if self.tool == "select" else Qt.CrossCursor)
@@ -467,7 +612,7 @@ class Canvas(QWidget):
         self.update()
 
     def mouseDoubleClickEvent(self, ev: QMouseEvent) -> None:
-        if self._drawing is not None and self._drawing.kind == Kind.ZONE:
+        if self._drawing is not None and self._drawing.kind in POLY_TOOLS:
             self._finish_zone(commit=True)
             return
         if not self.editable:
@@ -524,7 +669,7 @@ class Canvas(QWidget):
             dx0, dy0 = grab.x() - anchor.x(), grab.y() - anchor.y()
             sx = (local.x() - anchor.x()) / dx0 if dx0 else 1.0
             sy = (local.y() - anchor.y()) / dy0 if dy0 else 1.0
-            if mods & Qt.ShiftModifier or (single and origs[0].kind == Kind.TEXT):
+            if mods & Qt.ShiftModifier or (single and origs[0].kind in UNIFORM_SCALE):
                 s = max(abs(sx), abs(sy))
                 sx = math.copysign(s, sx)
                 sy = math.copysign(s, sy)
@@ -542,7 +687,7 @@ class Canvas(QWidget):
                 continue
             a.points = list(o.points)
             a.font_size = o.font_size
-            if a.kind == Kind.TEXT:
+            if a.kind in UNIFORM_SCALE:
                 sxy = abs(sy) if handle in (1, 5) else abs(sx)
                 a.scale(sxy, sxy, (anchor.x(), anchor.y()))
             else:
@@ -579,10 +724,50 @@ class Canvas(QWidget):
     # ------------------------------------------------------------ drawing
     def _new_annotation(self, kind: str, pts) -> Annotation:
         st = self.style
-        hold = max(0, st.hold_frames - 1)
-        return Annotation(kind, pts, self.frame, self.frame + hold, color=st.color,
-                          width=st.width, opacity=st.opacity, fill_opacity=st.fill_opacity,
-                          font_size=st.font_size)
+        if self.board_mode:
+            start, end = 0, 10 ** 9
+        else:
+            start, end = self.frame, self.frame + max(0, st.hold_frames - 1)
+        a = Annotation(kind, pts, start, end, color=st.color, width=st.width, opacity=st.opacity,
+                       fill_opacity=st.fill_opacity, font_size=st.font_size)
+        if kind in (Kind.TOKEN, Kind.BALL):
+            a.font_size = self.token_size
+        elif kind == Kind.MEASURE:
+            a.font_size = 30.0
+            a.width = max(3.0, st.width * 0.6)
+        return a
+
+    def next_token_number(self, color: str) -> str:
+        used = {a.text for a in (self.doc.annotations if self.doc else [])
+                if a.kind == Kind.TOKEN and a.color.lower() == color.lower()}
+        n = 1
+        while str(n) in used:
+            n += 1
+        return str(n)
+
+    def _image_array(self):
+        import numpy as np
+        img = self.image.convertToFormat(QImage.Format_RGB888)
+        arr = np.frombuffer(img.constBits(), np.uint8).reshape(img.height(), img.bytesPerLine())
+        return arr[:, :img.width() * 3].reshape(img.height(), img.width(), 3).copy()
+
+    def make_cutout(self, poly) -> Optional[Annotation]:
+        """Lift the player inside *poly* (video coords) out of the current frame."""
+        from ..core.imaging import encode_png, make_cutout, to_b64
+        if self.image is None or len(poly) < 3:
+            return None
+        cut = make_cutout(self._image_array(), poly)
+        if cut is None:
+            return None
+        a = self._new_annotation(Kind.CUTOUT, [tuple(q) for q in poly])
+        a.source_points = [tuple(q) for q in poly]
+        a.crop = [cut.x, cut.y, int(cut.image.shape[1]), int(cut.image.shape[0])]
+        a.image = to_b64(encode_png(cut.image))
+        a.fill_image = to_b64(encode_png(cut.fill))
+        a.layer = "after"
+        a.width = 3.0
+        a.fill_opacity = 0.0
+        return a
 
     def _begin_draw(self, v: QPointF, ev: QMouseEvent) -> None:
         p = (v.x(), v.y())
@@ -594,7 +779,22 @@ class Canvas(QWidget):
                 a.fill_opacity = max(a.fill_opacity, 0.25)
                 self._commit_new(a)
             return
-        if self.tool == Kind.ZONE:
+        if self.tool in (Kind.TOKEN, Kind.BALL):
+            a = self._new_annotation(self.tool, [p])
+            if self.tool == Kind.TOKEN:
+                a.text = self.next_token_number(a.color)
+            self._commit_new(a)
+            return
+        if self.tool == Kind.CUTOUT and self._drawing is None:
+            # Press-and-drag traces a lasso; separate clicks place polygon points.
+            self._drawing = self._new_annotation(Kind.CUTOUT, [p])
+            self._drawing.width = 3.0
+            self._lasso_moved = False
+            self._drag = "cutline"
+            self.statusMessage.emit("Trace around the player (drag), or click points and press Enter.")
+            self.update()
+            return
+        if self.tool in POLY_TOOLS:
             if self._drawing is None:
                 self._drawing = self._new_annotation(Kind.ZONE, [p])
             else:
@@ -651,11 +851,23 @@ class Canvas(QWidget):
 
     def _finish_zone(self, commit: bool) -> None:
         a = self._drawing
-        if a is None or a.kind != Kind.ZONE:
+        if a is None or a.kind not in POLY_TOOLS:
             return
         self._drawing = None
+        self._lasso_moved = False
         if commit and len(a.points) >= 3:
-            self._commit_new(a)
+            if a.kind == Kind.CUTOUT:
+                pts = a.points if len(a.points) < 6 else _simplify(a.points, 0.6 / max(self.scale_factor(), 0.01))
+                cut = self.make_cutout(pts if len(pts) >= 3 else a.points)
+                if cut is None:
+                    self.statusMessage.emit("Cut-out is too small — trace around the whole player.")
+                else:
+                    self._commit_new(cut)
+                    self.set_tool("select")
+                    self.set_selection({cut.id})
+                    self.statusMessage.emit("Player cut out — drag it to where they should be.")
+            else:
+                self._commit_new(a)
         self.update()
 
     def _commit_new(self, a: Annotation) -> None:
@@ -688,7 +900,7 @@ class Canvas(QWidget):
     # ================================================================= keys
     def keyPressEvent(self, ev: QKeyEvent) -> None:
         k = ev.key()
-        if self._drawing is not None and self._drawing.kind == Kind.ZONE:
+        if self._drawing is not None and self._drawing.kind in POLY_TOOLS:
             if k in (Qt.Key_Return, Qt.Key_Enter):
                 self._finish_zone(commit=True)
                 return
@@ -739,7 +951,7 @@ class Canvas(QWidget):
         if not self.selection:
             return
         self.temp = [a for a in self.temp if a.id not in self.selection]
-        doc_ids = [i for i in self.selection if self.doc and self.doc.project.annotation(i)]
+        doc_ids = [i for i in self.selection if self.doc and self.doc.find_annotation(i)]
         if doc_ids:
             self.doc.remove_annotations(doc_ids)
         self.set_selection(set())
