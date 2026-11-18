@@ -38,10 +38,25 @@ def _atomic_write(path: str, data: str) -> None:
         raise
 
 
+def _json_default(o):
+    """Numbers from numpy/OpenCV (e.g. float32 from tracking) are written as plain numbers."""
+    try:
+        import numpy as np
+        if isinstance(o, np.generic):
+            return o.item()
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+    except ImportError:
+        pass
+    if isinstance(o, (set, frozenset)):
+        return sorted(o)
+    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+
 def serialise(project: Project) -> str:
     payload = {"format": FORMAT, "version": VERSION, "saved": time.time(),
                "project": project.to_dict()}
-    return json.dumps(payload, indent=1, ensure_ascii=False)
+    return json.dumps(payload, indent=1, ensure_ascii=False, default=_json_default)
 
 
 def save_project(project: Project, path: str, make_backup: bool = True) -> None:
@@ -151,7 +166,7 @@ class Recovery:
         path = self._file_for(project)
         payload = {"format": FORMAT, "version": VERSION, "saved": time.time(),
                    "project_path": project_path, "project": project.to_dict()}
-        _atomic_write(path, json.dumps(payload, ensure_ascii=False))
+        _atomic_write(path, json.dumps(payload, ensure_ascii=False, default=_json_default))
         return path
 
     def discard(self, project: Project) -> None:

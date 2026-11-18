@@ -129,8 +129,9 @@ class PlayerTracker:
         if mode == "track":
             box, score = self._refine(frame_rgb, box)
         if self.coasting > self.MAX_COAST:
-            self.box = box
-            return TrackStep(box, False, 0.0)
+            self.box = tuple(float(v) for v in box)
+            return TrackStep(self.box, False, 0.0)
+        box = tuple(float(v) for v in box)      # plain floats (numpy float32 leaks otherwise)
         self.box = box
         conf = {"track": 0.5 + 0.5 * max(0.0, score), "partial": 0.5, "coast": 0.2}[mode]
         return TrackStep(box, True, float(min(1.0, conf)))

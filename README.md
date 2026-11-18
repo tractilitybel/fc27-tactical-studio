@@ -81,7 +81,7 @@ python -m venv .venv
 pip install -r requirements-dev.txt
 python scripts/fetch_models.py   # AI player-selection model (~45 MB)
 python run.py                    # optionally: python run.py path\to\match.mp4
-python -m pytest -q tests        # 123 tests
+python -m pytest -q tests        # 125 tests
 ```
 
 ## Documentation

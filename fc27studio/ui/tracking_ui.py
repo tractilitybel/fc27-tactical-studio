@@ -138,7 +138,7 @@ def apply_track(a: Annotation, res: TrackResult, step: int = 1) -> None:
             pts = spot_points(box)
         else:
             pts = label_point(box, a.font_size)
-        kfs.append({"frame": int(f), "points": [tuple(p) for p in pts], "rotation": 0.0})
+        kfs.append({"frame": int(f), "points": [(float(x), float(y)) for x, y in pts], "rotation": 0.0})
     a.keyframes = sorted(kfs, key=lambda k: k["frame"])
     last = res.boxes[-1][0] if res.boxes else res.start
     a.end_frame = max(last, a.start_frame)

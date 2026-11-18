@@ -256,3 +256,42 @@ def test_calibrate_in_app_then_measure_and_stats(qapp, win, track_video):
     assert win.workspace == "board"
     kinds = [x.kind for x in win.current_board().annotations]
     assert Kind.FREEHAND in kinds
+
+
+def test_numpy_numbers_are_saved(tmp_path):
+    """Regression: float32/int64 values (from tracking/OpenCV) broke saving and autosave."""
+    from fc27studio.core import storage
+    from fc27studio.core.model import Annotation, Kind, Project
+    p = Project()
+    a = Annotation(Kind.CIRCLE, [(np.float32(1.5), np.float32(2.5)), (np.float64(3), np.int64(4))], 0, 10)
+    a.keyframes = [{"frame": np.int64(0), "points": [(np.float32(1), np.float32(2))] * 2, "rotation": np.float32(0)}]
+    a.track_style = "ring"
+    a.track_boxes = {0: [np.float32(1), np.float32(2), np.float32(3), np.float32(4)]}
+    p.annotations.append(a)
+    path = str(tmp_path / "np.fc27studio")
+    storage.save_project(p, path)
+    q = storage.load_project(path)
+    assert q.annotations[0].keyframes[0]["points"][0] == (1.0, 2.0)
+    rec = storage.Recovery(str(tmp_path / "rec"))
+    rec.write(p, path)                                   # autosave path too
+    assert rec.entries()
+
+
+def test_tracked_project_saves_and_reloads(qapp, win, track_video, tmp_path):
+    from fc27studio.core import storage
+    _path, truth = track_video
+    win.properties.track_style.setCurrentIndex(win.properties.track_style.findData("ring_label"))
+    win.properties.track_secs.setValue(1.5)
+    win.choose_tool("track")
+    drag_box(win.canvas, truth[0])
+    assert win.doc.project.annotations
+    out = str(tmp_path / "tracked.fc27studio")
+    assert win._save_to(out)                             # used to fail with float32
+    win.prefs.autosave_seconds = 1
+    win._last_autosave = 0
+    win.doc.mark_dirty()
+    win._autosave()
+    assert "failed" not in win.status_save.text().lower()
+    q = storage.load_project(out)
+    ring = next(a for a in q.annotations if a.track_style)
+    assert len(ring.keyframes) > 30 and ring.track_boxes

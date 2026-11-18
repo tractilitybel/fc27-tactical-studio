@@ -1967,8 +1967,11 @@ class MainWindow(QMainWindow):
         p.loop_a, p.loop_b = self.player.loop_a, self.player.loop_b
         try:
             storage.save_project(p, path)
-        except OSError as exc:
-            QMessageBox.critical(self, "Save failed", f"Could not save the project:\n{exc}")
+        except Exception as exc:     # never lose work: report and keep the window open
+            self._log_error("save", exc)
+            QMessageBox.critical(self, "Save failed",
+                                 f"Could not save the project:\n{type(exc).__name__}: {exc}\n\n"
+                                 "Your work is still open — please try Save As to another place.")
             return False
         self.doc.path = path
         self.doc.mark_clean()
@@ -1991,8 +1994,19 @@ class MainWindow(QMainWindow):
         try:
             self.recovery.write(self.doc.project, self.doc.path)
             self.status_save.setText(f"Autosaved {time.strftime('%H:%M')}")
-        except OSError as exc:
+        except Exception as exc:  # report once in the status bar, never every minute in a dialog
             self.status_save.setText(f"Autosave failed: {exc}")
+
+    def _log_error(self, where: str, exc: BaseException) -> None:
+        import traceback
+        try:
+            d = os.path.join(app_data_dir(), "logs")
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "errors.log"), "a", encoding="utf-8") as f:
+                f.write(f"\n--- {time.ctime()} ({where}) ---\n" + "".join(
+                    traceback.format_exception(type(exc), exc, exc.__traceback__)))
+        except OSError:
+            pass
 
     def emergency_autosave(self) -> None:
         try:
