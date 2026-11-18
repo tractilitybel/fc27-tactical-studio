@@ -162,6 +162,7 @@ class AudioOutput(QObject):
     def should_play(self) -> bool:
         p = self.player
         return (self.engine is not None and self.device_available and p.playing and p.direction > 0
+                and not getattr(p, "holding", False)
                 and MIN_SPEED <= p.speed <= MAX_SPEED and not self.muted and self.volume > 0)
 
     def _ensure_stream(self) -> bool:

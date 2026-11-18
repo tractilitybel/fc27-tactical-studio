@@ -235,6 +235,49 @@ class PropertiesPanel(QWidget):
         cg.addRow(reset)
         lay.addWidget(self.cut_box)
 
+        # Animation
+        self.anim_box = QGroupBox("Animation")
+        ag2 = QGridLayout(self.anim_box)
+        ag2.addWidget(QLabel("Draw-on"), 0, 0)
+        self.reveal_s = QDoubleSpinBox()
+        self.reveal_s.setRange(0, 30)
+        self.reveal_s.setDecimals(1)
+        self.reveal_s.setSingleStep(0.5)
+        self.reveal_s.setSuffix(" s")
+        self.reveal_s.setSpecialValueText("off")
+        self.reveal_s.setToolTip("Arrows, runs and lines draw themselves from start to tip over this time; "
+                                 "other drawings fade in.")
+        self.reveal_s.valueChanged.connect(
+            lambda v: self._set("reveal_frames", int(round(v * self.fps)), "reveal"))
+        ag2.addWidget(self.reveal_s, 0, 1, 1, 3)
+        self.kf_label = QLabel("Not moving")
+        self.kf_label.setObjectName("hint")
+        self.kf_label.setWordWrap(True)
+        ag2.addWidget(self.kf_label, 1, 0, 1, 4)
+        self.kf_prev = QPushButton("◀")
+        self.kf_prev.setToolTip("Previous keyframe")
+        self.kf_add = QPushButton("◆ Keyframe here")
+        self.kf_add.setToolTip("Remember the drawing's position at this frame. Then go to another frame "
+                               "and move it — it glides between the positions.")
+        self.kf_next = QPushButton("▶")
+        self.kf_next.setToolTip("Next keyframe")
+        self.kf_del = QPushButton("Remove here")
+        self.kf_clear = QPushButton("Stop moving")
+        self.kf_clear.setToolTip("Remove all keyframes (keeps the current position)")
+        ag2.addWidget(self.kf_prev, 2, 0)
+        ag2.addWidget(self.kf_add, 2, 1, 1, 2)
+        ag2.addWidget(self.kf_next, 2, 3)
+        ag2.addWidget(self.kf_del, 3, 0, 1, 2)
+        ag2.addWidget(self.kf_clear, 3, 2, 1, 2)
+        self.kf_add.clicked.connect(self._add_keyframe)
+        self.kf_del.clicked.connect(self._remove_keyframe)
+        self.kf_clear.clicked.connect(self._clear_keyframes)
+        self.kf_prev.clicked.connect(lambda: self._goto_keyframe(-1))
+        self.kf_next.clicked.connect(lambda: self._goto_keyframe(1))
+        self.seek_request = None   # callable(frame) set by the main window
+        lay.addWidget(self.anim_box)
+        self.anim_box.setVisible(not board)
+
         arrange = QGroupBox("Arrange")
         ag = QGridLayout(arrange)
         self.btns = {}
@@ -263,6 +306,48 @@ class PropertiesPanel(QWidget):
 
     def _doc_ids(self) -> list[str]:
         return [a.id for a in self.canvas.selected() if not self.canvas.is_temp(a.id)]
+
+    # ----------------------------------------------------------- keyframes
+    def _anim_targets(self):
+        return [a for a in self.canvas.selected() if not self.canvas.is_temp(a.id)]
+
+    def _add_keyframe(self) -> None:
+        from ..core.animation import set_keyframe
+        targets = self._anim_targets()
+        if not targets or not self.canvas.doc:
+            return
+        f = self.canvas.frame
+
+        def fn(a):
+            set_keyframe(a, f)
+            a.start_frame = min(a.start_frame, f)
+            a.end_frame = max(a.end_frame, f)
+        self.canvas.doc.modify_annotations([a.id for a in targets], fn, "Add keyframe")
+        self.sync()
+
+    def _remove_keyframe(self) -> None:
+        from ..core.animation import remove_keyframe
+        targets = [a for a in self._anim_targets() if a.keyframes]
+        f = self.canvas.frame
+        if targets and self.canvas.doc:
+            self.canvas.doc.modify_annotations([a.id for a in targets], lambda a: remove_keyframe(a, f),
+                                               "Remove keyframe")
+            self.canvas.sync_animation()
+            self.sync()
+
+    def _clear_keyframes(self) -> None:
+        targets = [a for a in self._anim_targets() if a.keyframes]
+        if targets and self.canvas.doc:
+            self.canvas.doc.modify_annotations([a.id for a in targets], lambda a: setattr(a, "keyframes", []),
+                                               "Stop moving")
+            self.sync()
+
+    def _goto_keyframe(self, direction: int) -> None:
+        frames = sorted({k["frame"] for a in self._anim_targets() for k in a.keyframes})
+        f = self.canvas.frame
+        cand = [x for x in frames if (x > f if direction > 0 else x < f)]
+        if cand and self.seek_request:
+            self.seek_request(cand[0] if direction > 0 else cand[-1])
 
     def _reset_cutout(self) -> None:
         cuts = [a for a in self.canvas.selected() if a.kind == Kind.CUTOUT and a.source_points]
@@ -356,6 +441,25 @@ class PropertiesPanel(QWidget):
             self.end_s.setValue(max(a.end_frame for a in sel if not self.canvas.is_temp(a.id)))
         cuts = [a for a in sel if a.kind == Kind.CUTOUT]
         self.cut_box.setVisible(bool(cuts))
+        if not self.board:
+            src_reveal = (src.reveal_frames if src else 0) / max(self.fps, 1.0)
+            self.reveal_s.setValue(round(src_reveal, 1))
+            self.reveal_s.setEnabled(n > 0)
+            anim = self._anim_targets()
+            kfs = sorted({k["frame"] for a in anim for k in a.keyframes})
+            for b in (self.kf_add,):
+                b.setEnabled(bool(anim))
+            for b in (self.kf_prev, self.kf_next, self.kf_del, self.kf_clear):
+                b.setEnabled(bool(kfs))
+            if not anim:
+                self.kf_label.setText("Select a drawing to animate it.")
+            elif not kfs:
+                self.kf_label.setText("Not moving. Press “Keyframe here”, go to a later frame and drag the "
+                                      "drawing: it glides between the two positions.")
+            else:
+                here = " (one here)" if self.canvas.frame in kfs else ""
+                self.kf_label.setText(f"Moves through {len(kfs)} keyframe{'s' if len(kfs) != 1 else ''}{here}. "
+                                      "Drag it at any frame to add another.")
         if cuts:
             self.ghost_s.setValue(int(round(cuts[0].ghost_opacity * 100)))
             self.link_cb.setChecked(cuts[0].show_link)

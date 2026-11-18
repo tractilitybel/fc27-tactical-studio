@@ -36,6 +36,7 @@ class Span:
     label: str
     selected: bool = False
     row: int = 0
+    keyframes: tuple = ()
 
 
 class ThumbPopup(QLabel):
@@ -215,12 +216,29 @@ class Timeline(QWidget):
                 p.setPen(QPen(QColor(255, 255, 255), 1))
                 p.setBrush(Qt.NoBrush)
                 p.drawRect(r.adjusted(-0.5, -0.5, 0.5, 0.5))
+            for kf in sp.keyframes:              # keyframes as small diamonds
+                if self.v0 <= kf <= self.v1:
+                    kx, ky = self._x_of(kf), r.center().y()
+                    p.setPen(QPen(QColor(20, 24, 30), 1))
+                    p.setBrush(QColor(255, 255, 255))
+                    p.drawPolygon(QPolygonF([QPointF(kx, ky - 4), QPointF(kx + 4, ky), QPointF(kx, ky + 4),
+                                             QPointF(kx - 4, ky)]))
         # Bookmarks (flags) and linked tactics boards (squares)
         for m in self.markers:
             if m.frame < self.v0 - 1 or m.frame > self.v1 + 1:
                 continue
             x = self._x_of(m.frame)
             c = QColor(m.color)
+            if m.kind == "freeze":
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(0, 199, 255))
+                p.drawRoundedRect(QRectF(x - 6, mark_top + 1, 12, 12), 2, 2)
+                p.setBrush(QColor(14, 16, 20))
+                p.drawRect(QRectF(x - 3, mark_top + 3.5, 2, 7))
+                p.drawRect(QRectF(x + 1, mark_top + 3.5, 2, 7))
+                p.setPen(QPen(QColor(0, 199, 255), 1, Qt.DashLine))
+                p.drawLine(QPointF(x, mark_top + 13), QPointF(x, bottom))
+                continue
             if m.kind == "board":
                 p.setPen(QPen(QColor(20, 24, 30), 1))
                 p.setBrush(c)

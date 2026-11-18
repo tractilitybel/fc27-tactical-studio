@@ -320,6 +320,12 @@ class MainWindow(QMainWindow):
         A("play.clear_loop", self.clear_loop)
         A("play.goto", self.goto_dialog)
         A("play.mute", self.toggle_mute)
+        A("play.add_freeze", self.add_freeze)
+        self.act_play_freezes = QAction("Play freeze frames", self)
+        self.act_play_freezes.setCheckable(True)
+        self.act_play_freezes.setChecked(self.prefs.play_freezes)
+        self.act_play_freezes.toggled.connect(self._set_play_freezes)
+        self.player.freezes_enabled = self.prefs.play_freezes
         A("bm.add", self.quick_bookmark)
         A("bm.add_detailed", self.detailed_bookmark)
         A("bm.next", lambda: self.jump_bookmark(1))
@@ -423,6 +429,9 @@ class MainWindow(QMainWindow):
         for k in ("play.set_a", "play.set_b", "play.toggle_loop", "play.clear_loop"):
             p.addAction(a[k])
         p.addSeparator()
+        p.addAction(a["play.add_freeze"])
+        p.addAction(self.act_play_freezes)
+        p.addSeparator()
         p.addAction(a["play.mute"])
         self.track_menu = p.addMenu("Audio track")
         self.track_menu.aboutToShow.connect(self._fill_track_menu)
@@ -474,6 +483,8 @@ class MainWindow(QMainWindow):
         tr.btn_loop.clicked.connect(self.toggle_loop)
         tr.frameEntered.connect(lambda f: pl.seek(f))
         tr.speedChosen.connect(pl.set_speed)
+        pl.freezeChanged.connect(self._on_freeze_changed)
+        self.properties.seek_request = lambda f: (pl.pause(), pl.seek(f))
         tr.btn_mute.clicked.connect(self.toggle_mute)
         tr.volume.valueChanged.connect(self._volume_changed)
         tr.volume.sliderReleased.connect(self.prefs.save)
@@ -529,6 +540,7 @@ class MainWindow(QMainWindow):
         self.match_info.load()
         self.current_board_id = None
         self.select_board(doc.project.boards[0].id if doc.project.boards else None)
+        self._sync_freezes()
         self._on_doc_changed("bookmarks")
         self._on_doc_changed("annotations")
         self._on_undo_changed()
@@ -540,6 +552,7 @@ class MainWindow(QMainWindow):
             self._refresh_markers()
             self._refresh_playlist()
         if what in ("annotations", "project"):
+            self.canvas.sync_animation()
             self.canvas.prune_selection()
             self.canvas.update()
             self.properties.sync()
@@ -556,6 +569,9 @@ class MainWindow(QMainWindow):
                 self.board_canvas.update()
         if what == "boards":
             self._refresh_markers()
+        if what in ("freezes", "project"):
+            self._refresh_markers()
+            self._sync_freezes()
         if what in ("board", "boards"):
             self.board_canvas.prune_selection()
             self.board_canvas.update()
@@ -583,6 +599,10 @@ class MainWindow(QMainWindow):
         p = self.doc.project
         markers = [Marker(b.id, b.frame, b.end_frame, p.category_color(b.category),
                           f"{b.category}: {b.title}") for b in p.bookmarks]
+        fps = self.player.fps or 30.0
+        markers += [Marker(f.id, f.frame, None, "#00c7ff",
+                           f"Freeze {f.seconds:g} s" + (f" — {f.note}" if f.note else "") +
+                           " (double-click to edit)", "freeze") for f in p.freezes]
         markers += [Marker(bd.id, bd.linked_frame, None, "#ffffff",
                            f"Tactics board: {bd.name} (double-click to open)", "board")
                     for bd in p.boards if bd.linked_frame is not None]
@@ -594,7 +614,8 @@ class MainWindow(QMainWindow):
         for a in self.doc.project.annotations[:600]:
             label = a.name or (a.text.split("\n")[0][:30] if a.kind == Kind.TEXT and a.text
                                else Kind.LABELS.get(a.kind, a.kind))
-            spans.append(Span(a.id, a.start_frame, a.end_frame, a.color, label, a.id in sel))
+            spans.append(Span(a.id, a.start_frame, a.end_frame, a.color, label, a.id in sel,
+                              keyframes=tuple(k["frame"] for k in a.keyframes)))
         self.timeline.set_ranges(spans)
 
     def _on_span_clicked(self, aid: str) -> None:
@@ -613,6 +634,9 @@ class MainWindow(QMainWindow):
                                      4000)
 
     def _on_marker_clicked(self, mid: str) -> None:
+        if any(f.id == mid for f in self.doc.project.freezes):
+            self.player.pause()
+            return
         if self.doc.project.board(mid) is not None:
             self.player.pause()
             self.select_board(mid)
@@ -620,6 +644,10 @@ class MainWindow(QMainWindow):
             self.bookmarks.select(mid)
 
     def _on_marker_double_clicked(self, mid: str) -> None:
+        fz = next((f for f in self.doc.project.freezes if f.id == mid), None)
+        if fz is not None:
+            self.edit_freeze(fz)
+            return
         if self.doc.project.board(mid) is not None:
             self.select_board(mid)
             self.set_workspace("board")
@@ -704,7 +732,65 @@ class MainWindow(QMainWindow):
         self.player.seek(frame)
 
     def toggle_play(self) -> None:
+        if self.player.holding:
+            self.player.skip_freeze()      # Space during a freeze: carry on now
+            return
         self.player.toggle()
+
+    # ============================================================ freezes
+    def _sync_freezes(self) -> None:
+        self.player.freezes = {f.frame: f.seconds for f in self.doc.project.freezes}
+
+    def _set_play_freezes(self, on: bool) -> None:
+        self.player.freezes_enabled = on
+        self.prefs.play_freezes = on
+        self.prefs.save()
+
+    def add_freeze(self) -> None:
+        if not self._need_video():
+            return
+        self.player.pause()
+        f = self.player.current
+        existing = self.doc.project.freeze_at(f)
+        if existing is not None:
+            self.edit_freeze(existing)
+            return
+        from ..core.model import Freeze
+        self.doc.add_freeze(Freeze(f, self.prefs.freeze_seconds))
+        self.statusBar().showMessage(f"Freeze frame added: playback will pause here for "
+                                     f"{self.prefs.freeze_seconds:g} s (double-click the blue marker to change).",
+                                     5000)
+
+    def edit_freeze(self, fz) -> None:
+        from PySide6.QtWidgets import QDoubleSpinBox
+        d = QDialog(self)
+        d.setWindowTitle("Freeze frame")
+        form = QFormLayout(d)
+        secs = QDoubleSpinBox()
+        secs.setRange(0.5, 120)
+        secs.setDecimals(1)
+        secs.setSuffix(" s")
+        secs.setValue(fz.seconds)
+        note = QLineEdit(fz.note)
+        note.setPlaceholderText("optional, e.g. 'look at the gap'")
+        form.addRow("Pause for", secs)
+        form.addRow("Note", note)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        delete = bb.addButton("Delete", QDialogButtonBox.DestructiveRole)
+        bb.accepted.connect(d.accept)
+        bb.rejected.connect(d.reject)
+        delete.clicked.connect(lambda: d.done(2))
+        form.addRow(bb)
+        r = d.exec()
+        if r == 2:
+            self.doc.remove_freeze(fz.id)
+        elif r:
+            self.doc.update_freeze(fz.id, seconds=secs.value(), note=note.text().strip())
+            self.prefs.freeze_seconds = secs.value()
+
+    def _on_freeze_changed(self, left: float) -> None:
+        self.canvas.freeze_badge = f"❚❚ {left:.0f}" if left > 0 else None
+        self.canvas.update()
 
     # ================================================================ sound
     def _update_audio_ui(self) -> None:

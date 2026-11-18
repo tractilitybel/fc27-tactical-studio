@@ -77,6 +77,9 @@ class Annotation:
     source_points: list = field(default_factory=list)   # outline at the original position
     ghost_opacity: float = 0.35          # 0 = original removed, 1 = original left untouched
     show_link: bool = True               # dashed outline + arrow from original to new position
+    # Animation
+    reveal_frames: int = 0               # >0: the drawing "draws itself" over this many frames
+    keyframes: list = field(default_factory=list)  # [{"frame", "points", "rotation"}], sorted by frame
 
     # ---------------------------------------------------------------- geometry
     def bbox(self) -> tuple[float, float, float, float]:
@@ -172,6 +175,13 @@ class Annotation:
         if self.kind != Kind.CUTOUT:  # keep files small and readable
             for k in ("image", "fill_image", "crop", "source_points", "ghost_opacity", "show_link"):
                 d.pop(k, None)
+        if not self.keyframes:
+            d.pop("keyframes", None)
+        else:
+            d["keyframes"] = [{"frame": k["frame"], "points": [list(p) for p in k["points"]],
+                               "rotation": k.get("rotation", 0.0)} for k in self.keyframes]
+        if not self.reveal_frames:
+            d.pop("reveal_frames", None)
         return d
 
     @classmethod
@@ -179,6 +189,8 @@ class Annotation:
         d = dict(d)
         d["points"] = [tuple(p) for p in d.get("points", [])]
         d["source_points"] = [tuple(p) for p in d.get("source_points", [])]
+        d["keyframes"] = [{"frame": int(k["frame"]), "points": [tuple(p) for p in k["points"]],
+                           "rotation": float(k.get("rotation", 0.0))} for k in d.get("keyframes", [])]
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in known})
 
@@ -270,6 +282,42 @@ class Bookmark:
 
 
 @dataclass
+class Freeze:
+    """Playback stops on this frame for *seconds* (drawings visible), then continues."""
+    frame: int
+    seconds: float = 3.0
+    note: str = ""
+    id: str = field(default_factory=new_id)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Freeze":
+        known = {f for f in cls.__dataclass_fields__}
+        return cls(**{k: v for k, v in d.items() if k in known})
+
+
+@dataclass
+class Commentary:
+    """A recorded voice clip placed on the timeline (WAV file next to the project)."""
+    frame: int
+    file: str                      # path relative to the project folder (or absolute)
+    seconds: float
+    gain: float = 1.0
+    name: str = ""
+    id: str = field(default_factory=new_id)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Commentary":
+        known = {f for f in cls.__dataclass_fields__}
+        return cls(**{k: v for k, v in d.items() if k in known})
+
+
+@dataclass
 class Board:
     """A 2D tactics board: top-down pitch with tokens and drawings."""
     name: str = "Board"
@@ -315,6 +363,9 @@ class Project:
     loop_a: Optional[int] = None
     loop_b: Optional[int] = None
     boards: list[Board] = field(default_factory=list)
+    freezes: list[Freeze] = field(default_factory=list)
+    commentary: list[Commentary] = field(default_factory=list)
+    duck_game_audio: bool = True        # lower game sound while commentary plays
     id: str = field(default_factory=new_id)
 
     # ---------------------------------------------------------- lookups
@@ -322,6 +373,12 @@ class Project:
         for a in self.annotations:
             if a.id == aid:
                 return a
+        return None
+
+    def freeze_at(self, frame: int) -> Optional[Freeze]:
+        for f in self.freezes:
+            if f.frame == frame:
+                return f
         return None
 
     def board(self, bid: str) -> Optional[Board]:
@@ -375,6 +432,9 @@ class Project:
             "loop_a": self.loop_a,
             "loop_b": self.loop_b,
             "boards": [b.to_dict() for b in self.boards],
+            "freezes": [f.to_dict() for f in self.freezes],
+            "commentary": [c.to_dict() for c in self.commentary],
+            "duck_game_audio": self.duck_game_audio,
         }
 
     @classmethod
@@ -395,4 +455,7 @@ class Project:
         p.loop_a = d.get("loop_a")
         p.loop_b = d.get("loop_b")
         p.boards = [Board.from_dict(b) for b in d.get("boards", [])]
+        p.freezes = [Freeze.from_dict(f) for f in d.get("freezes", [])]
+        p.commentary = [Commentary.from_dict(c) for c in d.get("commentary", [])]
+        p.duck_game_audio = bool(d.get("duck_game_audio", True))
         return p

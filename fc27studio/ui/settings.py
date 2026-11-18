@@ -23,6 +23,8 @@ class Preferences:
     default_hold_seconds: float = 3.0  # how long a new drawing stays visible
     big_step_seconds: float = 1.0    # Left/Right
     jump_seconds: float = 5.0        # Up/Down
+    freeze_seconds: float = 3.0
+    play_freezes: bool = True
     volume: float = 1.0
     muted: bool = False
     show_frame_numbers: bool = True
@@ -135,6 +137,7 @@ SHORTCUTS: dict[str, tuple[str, str, str]] = {
     "play.clear_loop": ("Playback", "Clear A/B loop", "\\"),
     "play.goto": ("Playback", "Go to time / frame…", "Ctrl+J"),
     "play.mute": ("Playback", "Mute / unmute sound", "M"),
+    "play.add_freeze": ("Playback", "Add freeze frame here", "F"),
     # Bookmarks
     "bm.add": ("Bookmarks", "Add bookmark", "B"),
     "bm.add_detailed": ("Bookmarks", "Add bookmark with details…", "Shift+B"),

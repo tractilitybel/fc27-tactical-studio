@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QInputDialog, QMenu, QWidget
 
 from ..core.document import Document
 from ..core.model import Annotation, Kind
+from ..core.animation import interpolate, posed, set_keyframe
 from .render import center_of, default_control, paint_annotation, paint_order, precise_bbox
 
 HANDLE = 5.0          # half size in screen px
@@ -95,6 +96,7 @@ class Canvas(QWidget):
         self.px_per_m: Optional[float] = None
         self.token_size = 22.0
         self._lasso_moved = False
+        self.freeze_badge: Optional[str] = None   # e.g. "Freeze 3" shown while playback holds
         # AI player selection (cut-out tool): provider returns a PlayerSegmenter or None
         self.segmenter_provider: Optional[Callable[[], object]] = None
         self._ai_sel = None
@@ -117,10 +119,23 @@ class Canvas(QWidget):
         self.image = img
         self.update()
 
+    def sync_animation(self) -> None:
+        """Put keyframed drawings into their pose for the current frame, so
+        selecting, hit-testing and dragging work on what is on screen."""
+        if self.doc is None:
+            return
+        self.doc.keyframe_frame = self.frame
+        if self._drag is not None:
+            return
+        for a in self.doc.annotations:
+            if a.keyframes:
+                a.points, a.rotation = interpolate(a, self.frame)
+
     def set_frame(self, frame: int) -> None:
         if frame != self.frame:
             self.cancel_ai_selection()
             self.frame = frame
+            self.sync_animation()
             # Drop selection of drawings that are no longer visible.
             vis = {a.id for a in self.visible_annotations()}
             if self.selection - vis:
@@ -306,6 +321,9 @@ class Canvas(QWidget):
         p.resetTransform()
         if self.compare == "split":
             self._paint_divider(p)
+        if self.freeze_badge:
+            fr = self._frame_widget_rect()
+            self._paint_label(p, QPointF(fr.right() - 88, fr.top() + 10), self.freeze_badge)
         if self.editable or self.selection:
             self._paint_selection(p)
         if self._rubber is not None:
@@ -334,7 +352,8 @@ class Canvas(QWidget):
         p.setClipRect(frame_rect, Qt.IntersectClip)
         if self.show_drawings:
             for a in sorted(self.visible_annotations(side), key=paint_order):
-                paint_annotation(p, a, frame_rect, self.px_per_m)
+                paint_annotation(p, posed(a, self.frame) if not self.board_mode else a,
+                                 frame_rect, self.px_per_m)
         p.restore()
 
     def _side_transforms(self) -> tuple[QTransform, QTransform]:
@@ -666,6 +685,13 @@ class Canvas(QWidget):
             self.tokenEditRequested.emit(hit.id)
 
     def _commit_edit(self, label: str) -> None:
+        if self.doc is not None:
+            for aid in self._before:
+                a = self.find(aid)
+                if a is not None and a.keyframes:
+                    set_keyframe(a, self.frame)     # dragging an animated drawing sets a keyframe
+                    if self.frame > a.end_frame:
+                        a.end_frame = self.frame
         if self.doc is not None and self._before:
             after = self.doc.snapshot(self._before.keys())
             self.doc.set_annotation_states(self._before, after, label)

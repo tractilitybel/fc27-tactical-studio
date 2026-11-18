@@ -14,6 +14,7 @@ from .undo import Command, UndoStack
 
 class Document:
     ANN_EVENT = "annotations"
+    keyframe_frame: Optional[int] = None   # frame on screen (set by the canvas) for keyframe edits
 
     def __init__(self, project: Optional[Project] = None, path: Optional[str] = None):
         self.project = project or Project()
@@ -111,7 +112,12 @@ class Document:
         before = {a.id: copy.deepcopy(a.__dict__) for a in targets}
         work = {a.id: copy.deepcopy(a) for a in targets}
         for a in work.values():
+            old = (list(a.points), a.rotation)
             fn(a)
+            # Animated drawing moved/rotated: store that pose as a keyframe at the current frame.
+            if a.keyframes and self.keyframe_frame is not None and (list(a.points), a.rotation) != old:
+                from .animation import set_keyframe
+                set_keyframe(a, self.keyframe_frame)
         after = {aid: copy.deepcopy(a.__dict__) for aid, a in work.items()}
         self._replace_states(before, after, label, merge_key)
 
@@ -251,6 +257,49 @@ class Document:
             for k, v in st.items():
                 setattr(proj, k, copy.deepcopy(v))
         self._cmd(label, lambda: apply(after), lambda: apply(before), "project")
+
+    # ------------------------------------------------ freezes / commentary
+    def _list_add(self, lst: list, item, label: str, event: str) -> None:
+        self._cmd(label, lambda: lst.append(item), lambda: lst.remove(item) if item in lst else None, event)
+
+    def _list_remove(self, lst: list, item_id: str, label: str, event: str) -> None:
+        item = next((x for x in lst if x.id == item_id), None)
+        if item is None:
+            return
+        pos = lst.index(item)
+        self._cmd(label, lambda: lst.remove(item), lambda: lst.insert(pos, item), event)
+
+    def _list_update(self, lst: list, item_id: str, label: str, event: str, **changes) -> None:
+        item = next((x for x in lst if x.id == item_id), None)
+        if item is None:
+            return
+        before = {k: copy.deepcopy(getattr(item, k)) for k in changes}
+        if all(before[k] == v for k, v in changes.items()):
+            return
+        after = copy.deepcopy(changes)
+
+        def apply(st):
+            for k, v in st.items():
+                setattr(item, k, copy.deepcopy(v))
+        self._cmd(label, lambda: apply(after), lambda: apply(before), event)
+
+    def add_freeze(self, freeze) -> None:
+        self._list_add(self.project.freezes, freeze, "Add freeze frame", "freezes")
+
+    def remove_freeze(self, fid: str) -> None:
+        self._list_remove(self.project.freezes, fid, "Delete freeze frame", "freezes")
+
+    def update_freeze(self, fid: str, **changes) -> None:
+        self._list_update(self.project.freezes, fid, "Edit freeze frame", "freezes", **changes)
+
+    def add_commentary(self, clip) -> None:
+        self._list_add(self.project.commentary, clip, "Add commentary", "commentary")
+
+    def remove_commentary(self, cid: str) -> None:
+        self._list_remove(self.project.commentary, cid, "Delete commentary", "commentary")
+
+    def update_commentary(self, cid: str, **changes) -> None:
+        self._list_update(self.project.commentary, cid, "Edit commentary", "commentary", **changes)
 
     # ---------------------------------------------------------------- boards
     def add_board(self, board: Board, index: Optional[int] = None) -> None:

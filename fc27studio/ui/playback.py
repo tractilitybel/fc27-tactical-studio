@@ -144,6 +144,7 @@ class Player(QObject):
     imageReady = Signal(int, QImage)      # decoded image for display
     stateChanged = Signal()               # playing / speed / loop changed
     seeked = Signal()                     # jump while playing (seek or loop wrap): resync sound
+    freezeChanged = Signal(float)         # >0: holding a freeze frame (seconds left); 0: released
     error = Signal(str)
 
     def __init__(self, parent=None):
@@ -166,6 +167,13 @@ class Player(QObject):
         self._play_f0 = 0
         self._thread: Optional[QThread] = None
         self._worker: Optional[DecodeWorker] = None
+        # Freeze frames: {frame: seconds}; playback holds on these frames
+        self.freezes: dict[int, float] = {}
+        self.freezes_enabled = True
+        self.holding = False
+        self._hold_until = 0.0
+        self._hold_frame = -1
+        self._freeze_done: set[int] = set()
         self._timer = QTimer(self)
         self._timer.setTimerType(Qt.PreciseTimer)
         self._timer.timeout.connect(self._tick)
@@ -223,6 +231,10 @@ class Player(QObject):
         if not self.is_open:
             return
         index = self.clamp(index)
+        if self.holding:
+            self.holding = False
+            self.freezeChanged.emit(0.0)
+        self._freeze_done = {index}
         if self.playing:
             self._play_t0 = time.perf_counter()
             self._play_f0 = index
@@ -272,6 +284,7 @@ class Player(QObject):
         self.playing = True
         self._play_t0 = time.perf_counter()
         self._play_f0 = self.current
+        self._freeze_done = {self.current}   # starting on a freeze frame doesn't hold again
         self._timer.start(max(4, int(500 / max(1.0, self.fps * self.speed))))
         self.stateChanged.emit()
 
@@ -279,7 +292,28 @@ class Player(QObject):
         if self.playing:
             self.playing = False
             self._timer.stop()
+            self._release_hold(emit_seek=False)
             self.stateChanged.emit()
+
+    # ------------------------------------------------------------ freezes
+    def _release_hold(self, emit_seek: bool = True) -> None:
+        if self.holding:
+            self.holding = False
+            self._play_f0, self._play_t0 = self._hold_frame, time.perf_counter()
+            self.freezeChanged.emit(0.0)
+            if emit_seek and self.playing:
+                self.seeked.emit()       # restart the sound after the pause
+            self.stateChanged.emit()
+
+    def skip_freeze(self) -> None:
+        """Continue immediately (e.g. presenter presses play during a freeze)."""
+        self._release_hold()
+
+    def _freeze_between(self, a: int, b: int) -> Optional[int]:
+        if not self.freezes_enabled or not self.freezes or self.direction < 0:
+            return None
+        hits = [f for f in self.freezes if a < f <= b and f not in self._freeze_done]
+        return min(hits) if hits else None
 
     def toggle(self) -> None:
         if self.playing:
@@ -338,6 +372,13 @@ class Player(QObject):
     def _tick(self) -> None:
         if not self.playing:
             return
+        if self.holding:
+            left = self._hold_until - time.perf_counter()
+            if left > 0:
+                self.freezeChanged.emit(left)
+                return
+            self._release_hold()
+            return
         elapsed = time.perf_counter() - self._play_t0
         target = self._play_f0 + int(elapsed * self.fps * self.speed) * self.direction
         if not self.drop_frames:
@@ -357,6 +398,16 @@ class Player(QObject):
             elif self.direction < 0 and target < a:
                 target = b
                 self._play_f0, self._play_t0 = b, time.perf_counter()
+        fz = self._freeze_between(self.current, target)
+        if fz is not None:
+            self._freeze_done.add(fz)
+            self._set_current(fz)
+            self.holding = True
+            self._hold_frame = fz
+            self._hold_until = time.perf_counter() + max(0.1, self.freezes[fz])
+            self.freezeChanged.emit(self._hold_until - time.perf_counter())
+            self.stateChanged.emit()   # sound pauses during the freeze
+            return
         if target >= self.frame_count - 1 and self.direction > 0:
             self._set_current(self.frame_count - 1)
             self.pause()
