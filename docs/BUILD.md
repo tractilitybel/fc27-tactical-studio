@@ -59,4 +59,4 @@ planned for Milestone 5 are Windows-only.
   (*More info → Run anyway*). Code signing needs a certificate and is planned for Milestone 6.
 - **Antivirus false positives** are occasionally reported for PyInstaller apps. The one-folder build used
   here (no self-extracting single file, no UPX compression) keeps that to a minimum.
-- The bundle is roughly 200–250 MB uncompressed, mostly Qt and FFmpeg.
+- The download (zip) is about 90 MB; most of it is Qt and FFmpeg.
